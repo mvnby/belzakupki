@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "belzakupki"
+version = "0.1.0"
+description = "BelZakupki tender monitoring service (FastAPI + Celery + PostgreSQL + Redis)"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "httpx",
+  "pydantic",
+  "sqlalchemy",
+  "alembic",
+  "redis",
+  "celery",
+  "python-dotenv",
+  "loguru",
+]
