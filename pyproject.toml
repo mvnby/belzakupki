@@ -11,11 +11,21 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "httpx",
+  "beautifulsoup4",
+  "lxml",
   "pydantic",
   "sqlalchemy",
+  "psycopg[binary]",
   "alembic",
   "redis",
   "rq",
   "python-dotenv",
   "loguru",
 ]
+
+[project.scripts]
+belzakupki-seed = "worker.cli:seed"
+belzakupki-ingest-goszakupki = "worker.cli:ingest_goszakupki"
+
+[tool.setuptools.packages.find]
+where = ["packages/db", "apps/worker/src"]

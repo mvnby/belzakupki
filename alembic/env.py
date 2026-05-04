@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+from pathlib import Path
+import sys
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
+for source_path in (ROOT_DIR / "packages/db", ROOT_DIR / "apps/worker/src"):
+    sys.path.insert(0, str(source_path))
 
 from belzakupki_db.base import Base
 from belzakupki_db import models  # noqa
