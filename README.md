@@ -6,12 +6,13 @@
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -e .
+export PYTHONPATH=packages/db:apps/worker/src
 docker compose up -d db redis
 .venv/bin/alembic upgrade head
 .venv/bin/belzakupki-seed
 .venv/bin/belzakupki-ingest-goszakupki --limit 20
 ```
 
-`goszakupki.by/tenders/posted` redirects anonymous requests to login. Set
-`GOSZAKUPKI_COOKIE` to an authenticated session cookie before running the
-ingest command against live tenders.
+The parser warms up a session on `goszakupki.by` before requesting posted
+tenders. If your local Python certificate store rejects the site certificate,
+set `GOSZAKUPKI_VERIFY_SSL=false` for local development.

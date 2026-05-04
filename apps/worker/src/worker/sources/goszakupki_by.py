@@ -59,23 +59,37 @@ def parse_tenders_html(
     for row in rows:
         cols = row.find_all("td")
 
-        if not cols:
+        if len(cols) < 2:
             continue
 
-        title = cols[0].get_text(strip=True)
-        link_tag = cols[0].find("a")
+        number_text = cols[0].get_text("\n", strip=True)
+        details_text = cols[1].get_text("\n", strip=True)
+        link_tag = cols[1].find("a")
 
-        if not title or link_tag is None or not link_tag.get("href"):
+        if not details_text or link_tag is None or not link_tag.get("href"):
             continue
 
+        title = link_tag.get_text(" ", strip=True)
         url = urljoin(base_url, link_tag["href"])
+        details_lines = [line for line in details_text.splitlines() if line.strip()]
 
         tenders.append(
             {
                 "external_id": extract_external_id(url),
                 "title": title,
+                "customer_name": details_lines[0] if details_lines else None,
                 "url": url,
-                "status": "posted",
+                "status": (
+                    cols[3].get_text(" ", strip=True) if len(cols) > 3 else "posted"
+                ),
+                "source_number": number_text.splitlines()[0] if number_text else None,
+                "procedure_type": (
+                    cols[2].get_text(" ", strip=True) if len(cols) > 2 else None
+                ),
+                "deadline": cols[4].get_text(" ", strip=True) if len(cols) > 4 else None,
+                "estimated_value": (
+                    cols[5].get_text(" ", strip=True) if len(cols) > 5 else None
+                ),
             }
         )
 
@@ -90,19 +104,21 @@ def fetch_tenders(
     *,
     verify_ssl: bool | None = None,
 ) -> list[dict]:
-    response = httpx.get(
-        URL,
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+
+    with httpx.Client(
         follow_redirects=True,
         headers=build_headers(),
         timeout=10,
-        verify=should_verify_ssl() if verify_ssl is None else verify_ssl,
-    )
-    response.raise_for_status()
+        verify=verify,
+    ) as client:
+        client.get(BASE_URL).raise_for_status()
+        response = client.get(URL)
+        response.raise_for_status()
 
-    if response.url.path == "/site/login":
-        raise RuntimeError(
-            "goszakupki.by redirected to login; set GOSZAKUPKI_COOKIE "
-            "with an authenticated session cookie to fetch posted tenders"
-        )
+        if response.url.path == "/site/login":
+            raise RuntimeError(
+                "goszakupki.by redirected to login after session warm-up"
+            )
 
-    return parse_tenders_html(response.text, limit=limit)
+        return parse_tenders_html(response.text, limit=limit)

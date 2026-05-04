@@ -70,6 +70,7 @@ def upsert_tender(
             source_id=source.id,
             external_id=external_id,
             title=item["title"],
+            customer_name=item.get("customer_name"),
             url=item["url"],
             status=item.get("status", "posted"),
             raw_data=item,
@@ -81,6 +82,7 @@ def upsert_tender(
         return tender, True
 
     tender.title = item["title"]
+    tender.customer_name = item.get("customer_name")
     tender.url = item["url"]
     tender.status = item.get("status", tender.status)
     tender.raw_data = item
