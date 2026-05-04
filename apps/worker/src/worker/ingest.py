@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -45,7 +46,14 @@ def get_or_create_source(session: Session) -> TenderSource:
         is_active=True,
     )
     session.add(source)
-    session.flush()
+
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        source = session.execute(
+            select(TenderSource).where(TenderSource.code == SOURCE_CODE)
+        ).scalar_one()
 
     return source
 
