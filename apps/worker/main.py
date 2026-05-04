@@ -1,14 +1,24 @@
 from __future__ import annotations
 
-import asyncio
+import os
+
+from redis import Redis
+from rq import Queue, Worker
 
 
-async def main() -> None:
-    """Worker entrypoint."""
+def build_redis() -> Redis:
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    return Redis.from_url(redis_url)
 
-    # TODO: Replace with real task runner (Celery/RQ/Arq).
-    print("BelZakupki worker is running (placeholder)")
+
+def main() -> None:
+    redis = build_redis()
+    queue = Queue("default", connection=redis)
+    worker = Worker([queue])
+
+    print("Starting RQ worker (queue=default)")
+    worker.work()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
