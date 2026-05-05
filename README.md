@@ -8,7 +8,7 @@ docker compose build
 docker compose up -d db redis
 docker compose run --rm api alembic upgrade head
 docker compose run --rm api belzakupki-seed
-docker compose up api worker
+docker compose up -d api worker
 ```
 
 Run the first ingest manually:
@@ -51,3 +51,30 @@ docker compose up -d db redis
 The parser warms up a session on `goszakupki.by` before requesting posted
 tenders. If your local Python certificate store rejects the site certificate,
 set `GOSZAKUPKI_VERIFY_SSL=false` for local development.
+
+## Docker troubleshooting
+
+If Compose reports `dependency failed to start: container belzakupki-db-1 is
+unhealthy`, check the database logs:
+
+```bash
+docker compose logs --tail=120 db
+```
+
+If the log contains `No space left on device`, Docker Desktop has run out of
+internal disk space. A safe first cleanup is:
+
+```bash
+docker builder prune -f
+docker compose restart db
+docker compose up -d api worker
+```
+
+If it happens again, remove unused Docker images as well:
+
+```bash
+docker image prune -a
+```
+
+Do not remove Docker volumes unless you intentionally want to delete local
+database data.
