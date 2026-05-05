@@ -8,7 +8,7 @@ docker compose build
 docker compose up -d db redis
 docker compose run --rm api alembic upgrade head
 docker compose run --rm api belzakupki-seed
-docker compose up api worker
+docker compose up -d api worker
 ```
 
 Run the first ingest manually:
@@ -17,7 +17,20 @@ Run the first ingest manually:
 docker compose run --rm api belzakupki-ingest-goszakupki --limit 20
 ```
 
-The API is available at <http://localhost:8008/healthz> by default. Set
+Show saved tenders and scored matches:
+
+```bash
+docker compose run --rm api belzakupki-list-tenders --limit 20
+docker compose run --rm api belzakupki-list-matches --limit 20
+```
+
+The Docker setup defaults `GOSZAKUPKI_VERIFY_SSL=false` because
+`goszakupki.by` currently fails certificate verification in Python/httpx.
+Set it to `true` in environments where the certificate chain verifies cleanly.
+
+The API is available at <http://localhost:8008/healthz> by default. Tender data
+can be read from <http://localhost:8008/tenders?limit=20> and scored matches
+from <http://localhost:8008/matches?limit=20>. Set
 `API_PORT` to expose it on a different host port. If local Postgres or Redis
 ports are already busy, set `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT`.
 
@@ -31,8 +44,37 @@ docker compose up -d db redis
 .venv/bin/alembic upgrade head
 .venv/bin/belzakupki-seed
 .venv/bin/belzakupki-ingest-goszakupki --limit 20
+.venv/bin/belzakupki-list-tenders --limit 20
+.venv/bin/belzakupki-list-matches --limit 20
 ```
 
 The parser warms up a session on `goszakupki.by` before requesting posted
 tenders. If your local Python certificate store rejects the site certificate,
 set `GOSZAKUPKI_VERIFY_SSL=false` for local development.
+
+## Docker troubleshooting
+
+If Compose reports `dependency failed to start: container belzakupki-db-1 is
+unhealthy`, check the database logs:
+
+```bash
+docker compose logs --tail=120 db
+```
+
+If the log contains `No space left on device`, Docker Desktop has run out of
+internal disk space. A safe first cleanup is:
+
+```bash
+docker builder prune -f
+docker compose restart db
+docker compose up -d api worker
+```
+
+If it happens again, remove unused Docker images as well:
+
+```bash
+docker image prune -a
+```
+
+Do not remove Docker volumes unless you intentionally want to delete local
+database data.
