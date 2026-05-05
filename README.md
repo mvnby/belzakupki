@@ -17,6 +17,12 @@ Run the first ingest manually:
 docker compose run --rm api belzakupki-ingest-goszakupki --limit 20
 ```
 
+Run the test HVAC search for Vitebsk region:
+
+```bash
+docker compose run --rm api belzakupki-ingest-goszakupki --search-preset hvac-vitebsk --limit 20
+```
+
 Show saved tenders and scored matches:
 
 ```bash
@@ -44,6 +50,7 @@ docker compose up -d db redis
 .venv/bin/alembic upgrade head
 .venv/bin/belzakupki-seed
 .venv/bin/belzakupki-ingest-goszakupki --limit 20
+.venv/bin/belzakupki-ingest-goszakupki --search-preset hvac-vitebsk --limit 20
 .venv/bin/belzakupki-list-tenders --limit 20
 .venv/bin/belzakupki-list-matches --limit 20
 ```

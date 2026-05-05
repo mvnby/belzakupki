@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 
 from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSource
 from worker.scoring import score_text
-from worker.sources.goszakupki_by import BASE_URL, fetch_tenders
+from worker.sources.goszakupki_by import (
+    BASE_URL,
+    fetch_hvac_vitebsk_tenders,
+    fetch_tenders,
+)
 
 
 SOURCE_CODE = "goszakupki_by"
@@ -152,10 +156,17 @@ def ingest_goszakupki_tenders(
     session: Session,
     *,
     limit: int | None = None,
+    search_preset: str | None = None,
     commit: bool = True,
 ) -> IngestStats:
     source = get_or_create_source(session)
-    items = fetch_tenders(limit=limit)
+
+    if search_preset == "hvac-vitebsk":
+        items = fetch_hvac_vitebsk_tenders(limit=limit)
+    elif search_preset is None:
+        items = fetch_tenders(limit=limit)
+    else:
+        raise ValueError(f"Unknown goszakupki search preset: {search_preset}")
 
     created = 0
     updated = 0

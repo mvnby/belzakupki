@@ -62,10 +62,20 @@ def seed() -> None:
 def ingest_goszakupki() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--search-preset",
+        choices=("hvac-vitebsk",),
+        default=None,
+        help="Use a predefined goszakupki.by search instead of the full posted list.",
+    )
     args = parser.parse_args()
 
     with SessionLocal() as session:
-        stats = ingest_goszakupki_tenders(session, limit=args.limit)
+        stats = ingest_goszakupki_tenders(
+            session,
+            limit=args.limit,
+            search_preset=args.search_preset,
+        )
 
     print(
         "Ingest done: "
