@@ -7,7 +7,7 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
       REDIS_URL: redis://redis:6379/0
-      GOSZAKUPKI_VERIFY_SSL: "true"
+      GOSZAKUPKI_VERIFY_SSL: "${GOSZAKUPKI_VERIFY_SSL:-false}"
     ports:
       - "${API_PORT:-8008}:8000"
     depends_on:
@@ -24,7 +24,7 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
       REDIS_URL: redis://redis:6379/0
-      GOSZAKUPKI_VERIFY_SSL: "true"
+      GOSZAKUPKI_VERIFY_SSL: "${GOSZAKUPKI_VERIFY_SSL:-false}"
     depends_on:
       db:
         condition: service_healthy

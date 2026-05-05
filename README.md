@@ -17,6 +17,10 @@ Run the first ingest manually:
 docker compose run --rm api belzakupki-ingest-goszakupki --limit 20
 ```
 
+The Docker setup defaults `GOSZAKUPKI_VERIFY_SSL=false` because
+`goszakupki.by` currently fails certificate verification in Python/httpx.
+Set it to `true` in environments where the certificate chain verifies cleanly.
+
 The API is available at <http://localhost:8008/healthz> by default. Set
 `API_PORT` to expose it on a different host port. If local Postgres or Redis
 ports are already busy, set `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT`.
