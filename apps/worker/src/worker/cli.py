@@ -68,6 +68,11 @@ def ingest_goszakupki() -> None:
         default=None,
         help="Use a predefined goszakupki.by search instead of the full posted list.",
     )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Send notifications immediately after ingest.",
+    )
     args = parser.parse_args()
 
     with SessionLocal() as session:
@@ -77,13 +82,19 @@ def ingest_goszakupki() -> None:
             search_preset=args.search_preset,
         )
 
-    print(
-        "Ingest done: "
-        f"fetched={stats.fetched} "
-        f"created={stats.created} "
-        f"updated={stats.updated} "
-        f"matches={stats.matches}"
-    )
+        print(
+            "Ingest done: "
+            f"fetched={stats.fetched} "
+            f"created={stats.created} "
+            f"updated={stats.updated} "
+            f"matches={stats.matches}"
+        )
+
+        if args.notify:
+            from worker.notifications import dispatch_notifications
+            print("Sending notifications...")
+            count = dispatch_notifications(session)
+            print(f"Sent messages for {count} matches.")
 
 
 def show_tenders() -> None:
@@ -136,3 +147,10 @@ def show_matches() -> None:
         if index:
             print()
         _print_match(item)
+
+
+def send_notifications() -> None:
+    from worker.notifications import dispatch_notifications
+    with SessionLocal() as session:
+        count = dispatch_notifications(session)
+    print(f"Notification dispatch complete. Sent messages for {count} matches.")

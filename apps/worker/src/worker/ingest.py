@@ -62,6 +62,29 @@ def get_or_create_source(session: Session) -> TenderSource:
     return source
 
 
+from datetime import datetime, timezone, timedelta
+import re
+
+def parse_deadline_string(deadline_str: str | None) -> datetime | None:
+    if not deadline_str:
+        return None
+        
+    match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?", deadline_str)
+    if not match:
+        return None
+        
+    day, month, year, hour, minute = match.groups()
+    hour_val = int(hour) if hour else 23
+    min_val = int(minute) if minute else 59
+    
+    try:
+        tz_minsk = timezone(timedelta(hours=3))
+        dt = datetime(int(year), int(month), int(day), hour_val, min_val, tzinfo=tz_minsk)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
 def upsert_tender(
     session: Session,
     source: TenderSource,
@@ -69,6 +92,7 @@ def upsert_tender(
 ) -> tuple[Tender, bool]:
     external_id = str(item["external_id"])
     item_hash = content_hash(item)
+    deadline_dt = parse_deadline_string(item.get("deadline"))
 
     tender = session.execute(
         select(Tender).where(
@@ -87,6 +111,7 @@ def upsert_tender(
             status=item.get("status", "posted"),
             raw_data=item,
             content_hash=item_hash,
+            deadline_at=deadline_dt,
         )
         session.add(tender)
         session.flush()
@@ -99,6 +124,7 @@ def upsert_tender(
     tender.status = item.get("status", tender.status)
     tender.raw_data = item
     tender.content_hash = item_hash
+    tender.deadline_at = deadline_dt
 
     return tender, False
 
