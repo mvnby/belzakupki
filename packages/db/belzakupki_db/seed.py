@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from belzakupki_db.models import SearchProfile, TenderSource
+from belzakupki_db.models import NotificationChannel, SearchProfile, TenderSource
 
 
 HVAC_PROFILE_NAME = "Кондиционеры / HVAC"
@@ -61,7 +61,37 @@ def seed_search_profiles(session: Session) -> None:
     profile.is_active = True
 
 
+def seed_notification_channels(session: Session) -> None:
+    import os
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not bot_token or bot_token == "your-bot-token" or not chat_id or chat_id == "your-chat-id":
+        return
+
+    profile = session.query(SearchProfile).filter_by(name=HVAC_PROFILE_NAME).one_or_none()
+    if profile is None:
+        return
+
+    channel = session.query(NotificationChannel).filter_by(
+        profile_id=profile.id,
+        type="telegram",
+    ).first()
+
+    if channel is None:
+        channel = NotificationChannel(
+            profile_id=profile.id,
+            type="telegram",
+            name="Telegram Default",
+            config={"chat_id": chat_id},
+            is_active=True,
+        )
+        session.add(channel)
+    else:
+        channel.config = {"chat_id": chat_id}
+
+
 def seed_database(session: Session) -> None:
     seed_tender_sources(session)
     seed_search_profiles(session)
+    seed_notification_channels(session)
     session.commit()
