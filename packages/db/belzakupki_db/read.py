@@ -26,6 +26,15 @@ def _decimal_to_float(value: Decimal | None) -> float | None:
 def serialize_tender(tender: Tender) -> dict[str, Any]:
     raw_data = tender.raw_data or {}
 
+    ai_relevance = None
+    ai_analysis = None
+    if tender.matches:
+        for match in tender.matches:
+            if match.ai_analysis is not None:
+                ai_relevance = match.ai_relevance
+                ai_analysis = match.ai_analysis
+                break
+
     return {
         "id": tender.id,
         "source": tender.source.code if tender.source else None,
@@ -47,7 +56,11 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
         "deadline_at": _isoformat(tender.deadline_at),
         "created_at": _isoformat(tender.created_at),
         "updated_at": _isoformat(tender.updated_at),
+        "attachments": raw_data.get("attachments") or [],
+        "ai_relevance": ai_relevance,
+        "ai_analysis": ai_analysis,
     }
+
 
 
 def serialize_match(match: TenderMatch) -> dict[str, Any]:
@@ -61,6 +74,8 @@ def serialize_match(match: TenderMatch) -> dict[str, Any]:
             "id": match.profile.id,
             "name": match.profile.name,
         },
+        "ai_relevance": match.ai_relevance,
+        "ai_analysis": match.ai_analysis,
         "tender": serialize_tender(match.tender),
         "created_at": _isoformat(match.created_at),
         "updated_at": _isoformat(match.updated_at),
@@ -100,9 +115,14 @@ def list_tenders(
 def get_tender(session: Session, tender_id: int) -> Tender | None:
     return session.execute(
         select(Tender)
-        .options(joinedload(Tender.source))
+        .options(
+            joinedload(Tender.source),
+            joinedload(Tender.matches),
+        )
         .where(Tender.id == tender_id)
-    ).scalar_one_or_none()
+    ).unique().scalar_one_or_none()
+
+
 
 
 def list_matches(

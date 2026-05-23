@@ -49,6 +49,27 @@ def format_tender_message(match: TenderMatch) -> str:
     
     url = tender.url
     
+    # AI Analysis summary
+    ai_summary = ""
+    if match.ai_relevance and match.ai_analysis:
+        info = match.ai_analysis.get("commercial_proposal_info", {})
+        scope = info.get("scope", "")
+        reqs = info.get("requirements", "")
+        budget = info.get("budget_notes", "")
+        
+        ai_parts = [
+            "",
+            "🤖 <b>Анализ ИИ (DeepSeek):</b>",
+        ]
+        if scope:
+            ai_parts.append(f"📝 <b>Объем:</b> {html.escape(scope)}")
+        if reqs:
+            ai_parts.append(f"🛡️ <b>Требования:</b> {html.escape(reqs)}")
+        if budget:
+            ai_parts.append(f"💵 <b>Бюджет/Оплата:</b> {html.escape(budget)}")
+            
+        ai_summary = "\n".join(ai_parts)
+    
     message_lines = [
         "🔔 <b>Найден подходящий тендер!</b>",
         "",
@@ -59,11 +80,12 @@ def format_tender_message(match: TenderMatch) -> str:
         f"🏷️ <b>Ключевые слова:</b> {keywords}",
         f"💰 <b>Стоимость:</b> {estimated_value}",
         f"⏳ <b>Дедлайн подачи:</b> {deadline}",
+        ai_summary,
         "",
         f"🔗 <a href=\"{url}\">Открыть тендер на первоисточнике</a>",
     ]
     
-    return "\n".join(message_lines)
+    return "\n".join([line for line in message_lines if line is not None])
 
 
 def dispatch_notifications(session: Session) -> int:
@@ -89,6 +111,15 @@ def dispatch_notifications(session: Session) -> int:
     dispatched_count = 0
     
     for match in matches:
+        # Проверяем, не забракован ли тендер ИИ
+        if match.ai_relevance is False:
+            logger.info(
+                f"Tender match {match.id} (tender_id={match.tender.id}) was rejected by AI. "
+                "Marking as 'rejected_by_ai' and skipping notification."
+            )
+            match.status = "rejected_by_ai"
+            continue
+
         # Проверяем, не истек ли дедлайн подачи заявок
         deadline_at = match.tender.deadline_at
         if not deadline_at and match.tender.raw_data:

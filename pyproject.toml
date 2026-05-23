@@ -21,6 +21,8 @@ dependencies = [
   "rq",
   "python-dotenv",
   "loguru",
+  "pypdf",
+  "python-docx",
 ]
 
 [project.scripts]

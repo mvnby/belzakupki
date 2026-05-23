@@ -107,6 +107,11 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
         nullable=False,
         default=0,
     )
+    schedule_interval: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     matches: Mapped[list["TenderMatch"]] = relationship(
         back_populates="profile",
@@ -153,6 +158,9 @@ class TenderMatch(Base, TimestampMixin, ReprMixin):
     )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="new")
+
+    ai_relevance: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ai_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     tender: Mapped[Tender] = relationship(back_populates="matches")
     profile: Mapped[SearchProfile] = relationship(back_populates="matches")

@@ -10,6 +10,7 @@ services:
       GOSZAKUPKI_VERIFY_SSL: "${GOSZAKUPKI_VERIFY_SSL:-false}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+      DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
     ports:
       - "${API_PORT:-8008}:8000"
     depends_on:
@@ -29,11 +30,13 @@ services:
       GOSZAKUPKI_VERIFY_SSL: "${GOSZAKUPKI_VERIFY_SSL:-false}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+      DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+
 
   db:
     image: postgres:16
