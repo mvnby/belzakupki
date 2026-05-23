@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
+import shutil
+import tempfile
 from typing import Any
 import httpx
 from loguru import logger
@@ -13,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSource
+from belzakupki_db.enums import MatchStatus
 from worker.scoring import score_text
 from worker.sources.goszakupki_by import (
     BASE_URL,
@@ -55,9 +58,10 @@ def get_or_create_source(session: Session, code: str, name: str, base_url: str) 
     session.add(source)
 
     try:
-        session.flush()
+        with session.begin_nested():  # savepoint — откатит только этот INSERT
+            session.flush()
     except IntegrityError:
-        session.rollback()
+        # Другой воркер уже создал источник — просто читаем его
         source = session.execute(
             select(TenderSource).where(TenderSource.code == code)
         ).scalar_one()
@@ -169,7 +173,7 @@ def score_tender(session: Session, tender: Tender) -> int:
                 score=result.score,
                 matched_keywords=result.matched_keywords,
                 reason=result.reason,
-                status="new",
+                status=MatchStatus.NEW,
             )
             session.add(match)
         else:
@@ -310,8 +314,11 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
 
     logger.info(f"Running AI analysis for {len(matches)} new matches from source '{source_code}'...")
 
-    temp_dir = "/app/apps/worker/temp_docs" if os.path.exists("/app") else "/Users/maksimkorotov/Documents/belzakupki/apps/worker/temp_docs"
-    os.makedirs(temp_dir, exist_ok=True)
+    _custom_temp_dir = os.getenv("WORKER_TEMP_DIR")
+    temp_dir = _custom_temp_dir or tempfile.mkdtemp(prefix="belzakupki_docs_")
+    _temp_dir_managed = not _custom_temp_dir  # True = мы создали, мы и удалим
+    if _custom_temp_dir:
+        os.makedirs(temp_dir, exist_ok=True)
 
     from worker.analyzer.text_extractor import extract_text_from_file
     from worker.analyzer.deepseek_client import (
@@ -352,7 +359,7 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                     "explanation": metadata_analysis.get("explanation", "Отклонено на этапе проверки метаданных"),
                     "stage": 1
                 }
-                match.status = "rejected_by_ai"
+                match.status = MatchStatus.REJECTED_BY_AI
                 session.add(match)
                 session.flush()
                 continue
@@ -425,7 +432,7 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                 match.ai_analysis = analysis
                 if not match.ai_relevance:
                     logger.info(f"Tender {tender.id} rejected by AI. Setting status to 'rejected_by_ai'.")
-                    match.status = "rejected_by_ai"
+                    match.status = MatchStatus.REJECTED_BY_AI
                 else:
                     logger.info(f"Tender {tender.id} approved by AI. Keeping status 'new'.")
             else:
@@ -437,8 +444,8 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         except Exception as e:
             logger.error(f"Error during AI analysis of match {match.id}: {e}")
 
-    try:
-        if os.path.exists(temp_dir):
-            os.rmdir(temp_dir)
-    except Exception:
-        pass
+    if _temp_dir_managed:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass

@@ -196,6 +196,13 @@ class NotificationChannel(Base, TimestampMixin, ReprMixin):
 
 class NotificationLog(Base, ReprMixin):
     __tablename__ = "notification_logs"
+    __table_args__ = (
+        UniqueConstraint(
+            "match_id",
+            "channel_id",
+            name="uq_notification_logs_match_id_channel_id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
 

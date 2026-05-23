@@ -29,5 +29,8 @@ def get_session() -> Generator[Session, None, None]:
 
     try:
         yield session
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()

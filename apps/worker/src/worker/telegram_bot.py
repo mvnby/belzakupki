@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from belzakupki_db.session import SessionLocal
 from belzakupki_db.models import TenderMatch, Tender
+from belzakupki_db.enums import MatchStatus
 from worker.notifications import format_tender_message, send_telegram_message
 
 def answer_callback_query(bot_token: str, callback_query_id: str, text: str | None = None) -> None:
@@ -103,7 +104,7 @@ def handle_callback_query(bot_token: str, callback_query: dict) -> None:
             
         elif action == "accept":
             logger.info(f"User accepted match ID {match_id}")
-            match.status = "accepted"
+            match.status = MatchStatus.ACCEPTED
             session.add(match)
             session.commit()
             
@@ -115,7 +116,7 @@ def handle_callback_query(bot_token: str, callback_query: dict) -> None:
             
         elif action == "reject":
             logger.info(f"User rejected match ID {match_id}")
-            match.status = "rejected"
+            match.status = MatchStatus.REJECTED
             session.add(match)
             session.commit()
             
