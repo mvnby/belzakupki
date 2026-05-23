@@ -147,6 +147,7 @@ def create_profile(data: SearchProfileCreate, session: Session = Depends(get_ses
         categories=data.categories,
         min_score=data.min_score,
         is_active=data.is_active,
+        schedule_interval=None if data.schedule_interval == "manual" else data.schedule_interval,
     )
     session.add(profile)
     session.commit()
@@ -176,6 +177,8 @@ def update_profile(profile_id: int, data: SearchProfileUpdate, session: Session 
         profile.min_score = data.min_score
     if data.is_active is not None:
         profile.is_active = data.is_active
+    if data.schedule_interval is not None:
+        profile.schedule_interval = None if data.schedule_interval == "manual" else data.schedule_interval
         
     session.commit()
     session.refresh(profile)
@@ -301,4 +304,123 @@ def matches(
         "limit": limit,
         "offset": offset,
     }
+
+
+def run_scheduled_profile_ingest_and_notify(profile_id: int):
+    from loguru import logger
+    logger.info(f"Starting scheduled ingest and notify for profile ID {profile_id}")
+    
+    from belzakupki_db.session import SessionLocal
+    from worker.ingest import ingest_goszakupki_tenders, ingest_icetrade_tenders, run_ai_analysis_for_new_matches
+    from worker.notifications import dispatch_notifications
+    
+    try:
+        with SessionLocal() as session:
+            profile = session.query(SearchProfile).filter(SearchProfile.id == profile_id).one_or_none()
+            if not profile or not profile.is_active:
+                logger.warning(f"Profile ID {profile_id} not active or not found. Skipping scheduled run.")
+                return
+            
+            # 1. Ingest
+            logger.info(f"Scheduler: Ingesting tenders for profile '{profile.name}' (ID {profile.id})")
+            ingest_goszakupki_tenders(session, profiles=[profile], limit=20)
+            ingest_icetrade_tenders(session, profiles=[profile], limit=20)
+            session.commit()
+            
+            # 2. AI Analysis for new matches of this profile
+            logger.info(f"Scheduler: Running AI analysis for new matches")
+            run_ai_analysis_for_new_matches(session, "goszakupki_by")
+            run_ai_analysis_for_new_matches(session, "icetrade_by")
+            session.commit()
+            
+            # 3. Dispatch notifications for new matches
+            logger.info(f"Scheduler: Dispatching notifications")
+            dispatch_notifications(session)
+            session.commit()
+            
+            logger.info(f"Scheduled run completed successfully for profile ID {profile_id}")
+    except Exception as e:
+        logger.error(f"Error during scheduled run for profile ID {profile_id}: {e}")
+
+
+def start_scheduler_loop():
+    def scheduler_worker():
+        from datetime import datetime, timezone
+        from loguru import logger
+        import time
+        from belzakupki_db.session import SessionLocal
+        
+        logger.info("Background scheduler thread started.")
+        
+        while True:
+            try:
+                with SessionLocal() as session:
+                    # Fetch active profiles with scheduler interval set
+                    profiles = session.query(SearchProfile).filter(
+                        SearchProfile.is_active == True,
+                        SearchProfile.schedule_interval.isnot(None),
+                        SearchProfile.schedule_interval != "manual"
+                    ).all()
+                    
+                    now = datetime.now(timezone.utc)
+                    
+                    for profile in profiles:
+                        # Determine interval in seconds
+                        interval_str = profile.schedule_interval
+                        if not interval_str:
+                            continue
+                            
+                        # Parse interval (e.g. "1h", "4h", "12h", "24h")
+                        seconds = None
+                        try:
+                            if interval_str.endswith("h"):
+                                seconds = int(interval_str[:-1]) * 3600
+                            elif interval_str.endswith("d"):
+                                seconds = int(interval_str[:-1]) * 86400
+                            elif interval_str.endswith("m"):
+                                seconds = int(interval_str[:-1]) * 60
+                        except ValueError:
+                            logger.error(f"Invalid schedule interval '{interval_str}' for profile {profile.id}")
+                            continue
+                            
+                        if seconds is None:
+                            continue
+                            
+                        should_run = False
+                        if profile.last_run_at is None:
+                            should_run = True
+                        else:
+                            last_run = profile.last_run_at
+                            if last_run.tzinfo is None:
+                                last_run = last_run.replace(tzinfo=timezone.utc)
+                            elapsed = (now - last_run).total_seconds()
+                            if elapsed >= seconds:
+                                should_run = True
+                                
+                        if should_run:
+                            logger.info(f"Scheduler: Profile '{profile.name}' (ID {profile.id}) is due for run. Last run: {profile.last_run_at}")
+                            # Update last_run_at BEFORE starting so we don't double-trigger if it takes long
+                            profile.last_run_at = now
+                            session.add(profile)
+                            session.commit()
+                            
+                            # Run the task in a separate thread so it doesn't block the scheduler loop
+                            t = threading.Thread(
+                                target=run_scheduled_profile_ingest_and_notify,
+                                args=(profile.id,),
+                                daemon=True
+                            )
+                            t.start()
+            except Exception as e:
+                logger.error(f"Scheduler loop error: {e}")
+                
+            time.sleep(60) # Poll every 60 seconds
+            
+    thread = threading.Thread(target=scheduler_worker, daemon=True)
+    thread.start()
+
+
+@app.on_event("startup")
+def on_startup():
+    start_scheduler_loop()
 

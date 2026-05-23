@@ -343,6 +343,28 @@ async function loadProfilesData() {
                 ? profile.categories.map(c => `<span class="tag-badge cat">${c}</span>`).join('')
                 : '<span class="text-muted">Все отрасли</span>';
             const minScoreHTML = `Порог: <strong>${profile.min_score || 0}</strong> баллов`;
+            
+            // Format schedule preview
+            const scheduleMap = {
+                '1h': 'Каждые 1 ч',
+                '4h': 'Каждые 4 ч',
+                '12h': 'Каждые 12 ч',
+                '24h': 'Раз в сутки',
+            };
+            const scheduleText = scheduleMap[profile.schedule_interval] || 'Вручную';
+            
+            // Format last run time
+            let lastRunText = 'Не запускался';
+            if (profile.last_run_at) {
+                const lastRunDate = new Date(profile.last_run_at);
+                lastRunText = lastRunDate.toLocaleString('ru-RU', {
+                    day: 'numeric',
+                    month: 'numeric',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
 
             // Channel indicator
             let channelIndicatorHTML = '<span class="text-muted" style="font-size:13px;"><i class="fa-solid fa-bell-slash"></i> Telegram выключен</span>';
@@ -378,6 +400,17 @@ async function loadProfilesData() {
                     <div>
                         <h4 class="profile-meta-title">Минимальный скоринг</h4>
                         <div style="font-size:13px; color:var(--text-secondary);">${minScoreHTML}</div>
+                    </div>
+                </div>
+
+                <div class="profile-meta-row-2col" style="margin-top:10px;">
+                    <div>
+                        <h4 class="profile-meta-title">Авто-сбор</h4>
+                        <div style="font-size:13px; color:var(--text-secondary);">🕒 ${scheduleText}</div>
+                    </div>
+                    <div>
+                        <h4 class="profile-meta-title">Последний запуск</h4>
+                        <div style="font-size:13px; color:var(--text-secondary);">${lastRunText}</div>
                     </div>
                 </div>
 
@@ -556,6 +589,7 @@ function openCreateProfileModal() {
     document.getElementById('form-channel-active').checked = true;
     document.getElementById('form-telegram-chat').value = '';
     document.getElementById('form-profile-min-score').value = 0;
+    document.getElementById('form-profile-schedule').value = 'manual';
     
     document.querySelectorAll('input[name="form-profile-region"]').forEach(cb => cb.checked = false);
     
@@ -581,6 +615,7 @@ async function openEditProfileModal(profileId) {
     document.getElementById('form-profile-description').value = profile.description || '';
     document.getElementById('form-profile-active').checked = profile.is_active;
     document.getElementById('form-profile-min-score').value = profile.min_score || 0;
+    document.getElementById('form-profile-schedule').value = profile.schedule_interval || 'manual';
 
     // Fill regions checkboxes
     document.querySelectorAll('input[name="form-profile-region"]').forEach(cb => {
@@ -669,6 +704,7 @@ async function saveProfile() {
 
     const selectedRegions = Array.from(document.querySelectorAll('input[name="form-profile-region"]:checked')).map(cb => cb.value);
     const minScore = parseFloat(document.getElementById('form-profile-min-score').value) || 0;
+    const scheduleInterval = document.getElementById('form-profile-schedule').value;
 
     const payload = {
         name,
@@ -678,7 +714,8 @@ async function saveProfile() {
         regions: selectedRegions,
         categories: state.editingCategories,
         min_score: minScore,
-        is_active
+        is_active,
+        schedule_interval: scheduleInterval
     };
 
     const isNew = !state.editingProfile;

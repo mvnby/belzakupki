@@ -107,6 +107,11 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
         nullable=False,
         default=0,
     )
+    schedule_interval: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     matches: Mapped[list["TenderMatch"]] = relationship(
         back_populates="profile",
