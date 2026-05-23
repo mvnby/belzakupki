@@ -254,3 +254,30 @@ def fetch_hvac_vitebsk_tenders(
         limit=limit,
         verify_ssl=verify_ssl,
     )
+
+
+def build_dynamic_searches(profiles: Iterable[Any]) -> list[IcetradeSearch]:
+    searches = []
+    for profile in profiles:
+        regions = tuple(profile.regions) if profile.regions else ()
+        for kw in (profile.keywords or [None]):
+            if kw is None:
+                continue
+            searches.append(IcetradeSearch(text=kw, regions=regions))
+    
+    if not searches:
+        searches.append(IcetradeSearch())
+    return searches
+
+
+def fetch_dynamic_tenders(
+    profiles: Iterable[Any],
+    limit: int | None = None,
+    *,
+    verify_ssl: bool | None = None,
+) -> list[dict]:
+    return fetch_tenders_for_searches(
+        build_dynamic_searches(profiles),
+        limit=limit,
+        verify_ssl=verify_ssl,
+    )

@@ -42,9 +42,11 @@ def run_ingest_task():
         from belzakupki_db.session import SessionLocal
         from worker.ingest import ingest_goszakupki_tenders, ingest_icetrade_tenders
         with SessionLocal() as session:
-            # Импортируем с дефолтным пресетом
-            ingest_goszakupki_tenders(session, search_preset="hvac-vitebsk", limit=20)
-            ingest_icetrade_tenders(session, search_preset="hvac-vitebsk", limit=20)
+            # Считываем активные профили
+            profiles = session.query(SearchProfile).filter(SearchProfile.is_active == True).all()
+            # Запускаем динамический сбор
+            ingest_goszakupki_tenders(session, profiles=profiles, limit=20)
+            ingest_icetrade_tenders(session, profiles=profiles, limit=20)
     except Exception as e:
         print(f"Error during background ingest: {e}")
     finally:
@@ -141,6 +143,9 @@ def create_profile(data: SearchProfileCreate, session: Session = Depends(get_ses
         description=data.description,
         keywords=data.keywords,
         negative_keywords=data.negative_keywords,
+        regions=data.regions,
+        categories=data.categories,
+        min_score=data.min_score,
         is_active=data.is_active,
     )
     session.add(profile)
@@ -163,6 +168,12 @@ def update_profile(profile_id: int, data: SearchProfileUpdate, session: Session 
         profile.keywords = data.keywords
     if data.negative_keywords is not None:
         profile.negative_keywords = data.negative_keywords
+    if data.regions is not None:
+        profile.regions = data.regions
+    if data.categories is not None:
+        profile.categories = data.categories
+    if data.min_score is not None:
+        profile.min_score = data.min_score
     if data.is_active is not None:
         profile.is_active = data.is_active
         

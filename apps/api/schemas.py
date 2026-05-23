@@ -6,6 +6,9 @@ class SearchProfileBase(BaseModel):
     description: Optional[str] = None
     keywords: List[str] = Field(default_factory=list)
     negative_keywords: List[str] = Field(default_factory=list)
+    regions: List[str] = Field(default_factory=list)
+    categories: List[str] = Field(default_factory=list)
+    min_score: float = 0.0
     is_active: bool = True
 
 class SearchProfileCreate(SearchProfileBase):
@@ -16,6 +19,9 @@ class SearchProfileUpdate(BaseModel):
     description: Optional[str] = None
     keywords: Optional[List[str]] = None
     negative_keywords: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    categories: Optional[List[str]] = None
+    min_score: Optional[float] = None
     is_active: Optional[bool] = None
 
 class SearchProfileResponse(SearchProfileBase):

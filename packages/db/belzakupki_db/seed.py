@@ -60,6 +60,9 @@ def seed_search_profiles(session: Session) -> None:
             description="Закупки по кондиционерам, вентиляции и климатическому оборудованию.",
             keywords=HVAC_KEYWORDS,
             negative_keywords=HVAC_NEGATIVE_KEYWORDS,
+            regions=["2"],
+            categories=["189"],
+            min_score=20.0,
             is_active=True,
         )
         session.add(profile)
@@ -67,6 +70,9 @@ def seed_search_profiles(session: Session) -> None:
 
     profile.keywords = HVAC_KEYWORDS
     profile.negative_keywords = HVAC_NEGATIVE_KEYWORDS
+    profile.regions = ["2"]
+    profile.categories = ["189"]
+    profile.min_score = 20.0
     profile.is_active = True
 
 

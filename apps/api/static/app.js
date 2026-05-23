@@ -12,7 +12,18 @@ const state = {
     editingProfile: null, // Holds profile object when editing, or null for new profile
     editingKeywords: [],
     editingNegativeKeywords: [],
+    editingCategories: [],
     pollingInterval: null
+};
+
+const REGION_NAMES = {
+    '1': 'Брестская область',
+    '2': 'Витебская область',
+    '3': 'Гомельская область',
+    '4': 'Гродненская область',
+    '5': 'г. Минск',
+    '6': 'Минская область',
+    '7': 'Могилевская область'
 };
 
 // --- DOM Elements ---
@@ -296,6 +307,15 @@ async function loadProfilesData() {
             const keywordsHTML = profile.keywords.map(kw => `<span class="tag-badge">${kw}</span>`).join('') || '<span class="text-muted">Нет</span>';
             const negKeywordsHTML = profile.negative_keywords.map(kw => `<span class="tag-badge neg">${kw}</span>`).join('') || '<span class="text-muted">Нет</span>';
             
+            // Format regions and categories preview
+            const regionsText = profile.regions && profile.regions.length > 0 
+                ? profile.regions.map(r => REGION_NAMES[r] || r).join(', ')
+                : 'Все регионы';
+            const categoriesHTML = profile.categories && profile.categories.length > 0
+                ? profile.categories.map(c => `<span class="tag-badge cat">${c}</span>`).join('')
+                : '<span class="text-muted">Все отрасли</span>';
+            const minScoreHTML = `Порог: <strong>${profile.min_score || 0}</strong> баллов`;
+
             // Channel indicator
             let channelIndicatorHTML = '<span class="text-muted" style="font-size:13px;"><i class="fa-solid fa-bell-slash"></i> Telegram выключен</span>';
             if (telegramChannel && telegramChannel.is_active) {
@@ -320,6 +340,22 @@ async function loadProfilesData() {
                 <div>
                     <h4 class="profile-meta-title">Исключающие слова</h4>
                     <div class="profile-keywords-preview">${negKeywordsHTML}</div>
+                </div>
+
+                <div class="profile-meta-row-2col">
+                    <div>
+                        <h4 class="profile-meta-title">Регионы поиска</h4>
+                        <div style="font-size:13px; color:var(--text-secondary);">${regionsText}</div>
+                    </div>
+                    <div>
+                        <h4 class="profile-meta-title">Минимальный скоринг</h4>
+                        <div style="font-size:13px; color:var(--text-secondary);">${minScoreHTML}</div>
+                    </div>
+                </div>
+
+                <div>
+                    <h4 class="profile-meta-title">Коды отраслей</h4>
+                    <div class="profile-keywords-preview">${categoriesHTML}</div>
                 </div>
 
                 <div>
@@ -418,6 +454,7 @@ function openCreateProfileModal() {
     state.editingProfile = null;
     state.editingKeywords = [];
     state.editingNegativeKeywords = [];
+    state.editingCategories = [];
     
     document.getElementById('modal-profile-title').textContent = 'Создать новый профиль поиска';
     document.getElementById('form-profile-id').value = '';
@@ -426,9 +463,13 @@ function openCreateProfileModal() {
     document.getElementById('form-profile-active').checked = true;
     document.getElementById('form-channel-active').checked = true;
     document.getElementById('form-telegram-chat').value = '';
+    document.getElementById('form-profile-min-score').value = 0;
+    
+    document.querySelectorAll('input[name="form-profile-region"]').forEach(cb => cb.checked = false);
     
     renderTags('keywords');
     renderTags('negative');
+    renderTags('categories');
     
     document.getElementById('profile-modal').style.display = 'flex';
 }
@@ -440,12 +481,19 @@ async function openEditProfileModal(profileId) {
     state.editingProfile = profile;
     state.editingKeywords = [...profile.keywords];
     state.editingNegativeKeywords = [...profile.negative_keywords];
+    state.editingCategories = [...(profile.categories || [])];
 
     document.getElementById('modal-profile-title').textContent = 'Редактировать профиль поиска';
     document.getElementById('form-profile-id').value = profile.id;
     document.getElementById('form-profile-name').value = profile.name;
     document.getElementById('form-profile-description').value = profile.description || '';
     document.getElementById('form-profile-active').checked = profile.is_active;
+    document.getElementById('form-profile-min-score').value = profile.min_score || 0;
+
+    // Fill regions checkboxes
+    document.querySelectorAll('input[name="form-profile-region"]').forEach(cb => {
+        cb.checked = profile.regions && profile.regions.includes(cb.value);
+    });
 
     // Load channel info
     try {
@@ -466,18 +514,26 @@ async function openEditProfileModal(profileId) {
 
     renderTags('keywords');
     renderTags('negative');
+    renderTags('categories');
 
     document.getElementById('profile-modal').style.display = 'flex';
 }
 
 function renderTags(type) {
-    const container = document.getElementById(type === 'keywords' ? 'keywords-tags-list' : 'negative-tags-list');
-    const tagsList = type === 'keywords' ? state.editingKeywords : state.editingNegativeKeywords;
+    const container = document.getElementById(
+        type === 'keywords' ? 'keywords-tags-list' : 
+        type === 'negative' ? 'negative-tags-list' : 
+        'categories-tags-list'
+    );
+    const tagsList = 
+        type === 'keywords' ? state.editingKeywords : 
+        type === 'negative' ? state.editingNegativeKeywords : 
+        state.editingCategories;
     
     container.innerHTML = '';
     tagsList.forEach((tag, idx) => {
         const item = document.createElement('div');
-        item.className = `tag-item ${type === 'negative' ? 'neg' : ''}`;
+        item.className = `tag-item ${type === 'negative' ? 'neg' : type === 'categories' ? 'cat' : ''}`;
         item.innerHTML = `
             <span>${tag}</span>
             <button type="button" class="tag-remove-btn" onclick="removeTag('${type}', ${idx})">&times;</button>
@@ -490,7 +546,10 @@ function addTag(type, value) {
     const val = value.trim();
     if (!val) return;
     
-    const tagsList = type === 'keywords' ? state.editingKeywords : state.editingNegativeKeywords;
+    const tagsList = 
+        type === 'keywords' ? state.editingKeywords : 
+        type === 'negative' ? state.editingNegativeKeywords : 
+        state.editingCategories;
     if (!tagsList.includes(val)) {
         tagsList.push(val);
         renderTags(type);
@@ -498,7 +557,10 @@ function addTag(type, value) {
 }
 
 function removeTag(type, index) {
-    const tagsList = type === 'keywords' ? state.editingKeywords : state.editingNegativeKeywords;
+    const tagsList = 
+        type === 'keywords' ? state.editingKeywords : 
+        type === 'negative' ? state.editingNegativeKeywords : 
+        state.editingCategories;
     tagsList.splice(index, 1);
     renderTags(type);
 }
@@ -513,11 +575,17 @@ async function saveProfile() {
         return;
     }
 
+    const selectedRegions = Array.from(document.querySelectorAll('input[name="form-profile-region"]:checked')).map(cb => cb.value);
+    const minScore = parseFloat(document.getElementById('form-profile-min-score').value) || 0;
+
     const payload = {
         name,
         description: description || null,
         keywords: state.editingKeywords,
         negative_keywords: state.editingNegativeKeywords,
+        regions: selectedRegions,
+        categories: state.editingCategories,
+        min_score: minScore,
         is_active
     };
 
@@ -640,6 +708,15 @@ function setupEventListeners() {
             e.preventDefault();
             addTag('negative', inputNegative.value);
             inputNegative.value = '';
+        }
+    });
+
+    const inputCategory = document.getElementById('input-category-tag');
+    inputCategory.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addTag('categories', inputCategory.value);
+            inputCategory.value = '';
         }
     });
 

@@ -100,6 +100,14 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    regions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    min_score: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2),
+        nullable=False,
+        default=0,
+    )
+
     matches: Mapped[list["TenderMatch"]] = relationship(
         back_populates="profile",
         cascade="all, delete-orphan",

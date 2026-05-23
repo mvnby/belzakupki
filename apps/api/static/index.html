@@ -275,6 +275,61 @@
                         <p class="form-help">Тендер пропускается, если в нем содержится хотя бы одно из этих исключающих слов.</p>
                     </div>
 
+                    <div class="form-group">
+                        <label>Регионы поиска (если не выбраны — поиск по всей стране)</label>
+                        <div class="regions-grid">
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="1">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Брестская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="2">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Витебская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="3">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Гомельская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="4">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Гродненская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="5">
+                                <span class="checkmark"></span>
+                                <span class="region-label">г. Минск</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="6">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Минская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="7">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Могилевская</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group-row-2col">
+                        <div class="form-group">
+                            <label>Коды отраслей (для госзакупок, e.g. 189)</label>
+                            <div class="tags-input-container">
+                                <div class="tags-list" id="categories-tags-list"></div>
+                                <input type="text" id="input-category-tag" placeholder="Нажмите Enter...">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="form-profile-min-score">Минимальный скоринг</label>
+                            <input type="number" id="form-profile-min-score" min="0" max="100" step="10" value="0">
+                        </div>
+                    </div>
+
                     <div class="form-group-row">
                         <label class="checkbox-container">
                             <input type="checkbox" id="form-profile-active" checked>

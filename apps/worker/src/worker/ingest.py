@@ -148,7 +148,8 @@ def score_tender(session: Session, tender: Tender) -> int:
     for profile in profiles:
         result = score_text(text, profile.keywords, profile.negative_keywords)
 
-        if result.score <= 0:
+        min_score = profile.min_score or 0.0
+        if result.score <= 0 or result.score < min_score:
             continue
 
         match = session.execute(
@@ -181,13 +182,17 @@ def score_tender(session: Session, tender: Tender) -> int:
 def ingest_goszakupki_tenders(
     session: Session,
     *,
+    profiles: list[SearchProfile] | None = None,
     limit: int | None = None,
     search_preset: str | None = None,
     commit: bool = True,
 ) -> IngestStats:
     source = get_or_create_source(session, SOURCE_CODE, SOURCE_NAME, BASE_URL)
 
-    if search_preset == "hvac-vitebsk":
+    if profiles is not None:
+        from worker.sources.goszakupki_by import fetch_dynamic_tenders
+        items = fetch_dynamic_tenders(profiles, limit=limit)
+    elif search_preset == "hvac-vitebsk":
         items = fetch_hvac_vitebsk_tenders(limit=limit)
     elif search_preset is None:
         items = fetch_tenders(limit=limit)
@@ -222,6 +227,7 @@ def ingest_goszakupki_tenders(
 def ingest_icetrade_tenders(
     session: Session,
     *,
+    profiles: list[SearchProfile] | None = None,
     limit: int | None = None,
     search_preset: str | None = None,
     commit: bool = True,
@@ -230,6 +236,7 @@ def ingest_icetrade_tenders(
         BASE_URL as ICETRADE_BASE_URL,
         fetch_hvac_vitebsk_tenders as fetch_icetrade_hvac,
         fetch_tenders as fetch_icetrade,
+        fetch_dynamic_tenders as fetch_icetrade_dynamic,
     )
 
     source = get_or_create_source(
@@ -239,7 +246,9 @@ def ingest_icetrade_tenders(
         ICETRADE_BASE_URL,
     )
 
-    if search_preset == "hvac-vitebsk":
+    if profiles is not None:
+        items = fetch_icetrade_dynamic(profiles, limit=limit)
+    elif search_preset == "hvac-vitebsk":
         items = fetch_icetrade_hvac(limit=limit)
     elif search_preset is None:
         items = fetch_icetrade(limit=limit)
