@@ -29,6 +29,7 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
     return {
         "id": tender.id,
         "source": tender.source.code if tender.source else None,
+        "source_name": tender.source.name if tender.source else None,
         "external_id": tender.external_id,
         "source_number": raw_data.get("source_number"),
         "title": tender.title,

@@ -177,15 +177,18 @@ async function loadOverviewData() {
         tbody.innerHTML = '';
 
         if (!matchesData.items || matchesData.items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Новых совпадений пока не найдено. Запустите импорт.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Новых совпадений пока не найдено. Запустите импорт.</td></tr>';
             return;
         }
 
         matchesData.items.forEach(match => {
             const tr = document.createElement('tr');
+            const sourceName = match.tender.source_name || match.tender.source || '-';
+            const sourceCode = match.tender.source || 'unknown';
             tr.innerHTML = `
                 <td>#${match.id}</td>
                 <td><a href="#" class="btn-link text-left" onclick="viewTenderDetails(${match.tender.id}); return false;">${match.tender.title}</a></td>
+                <td><span class="source-tag source-${sourceCode}">${sourceName}</span></td>
                 <td>${match.profile.name}</td>
                 <td><strong>${match.score}</strong></td>
                 <td><span class="badge badge-${match.status}">${match.status === 'new' ? 'новый' : match.status === 'processed' ? 'отправлен' : 'просрочен'}</span></td>
@@ -201,7 +204,7 @@ async function loadOverviewData() {
 // --- View: Tenders Load ---
 async function loadTendersData() {
     const tbody = document.getElementById('tenders-table-body');
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Загрузка списка тендеров...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Загрузка списка тендеров...</td></tr>';
 
     const offset = (state.tendersPage - 1) * state.tendersPageSize;
     let url = `/tenders?limit=${state.tendersPageSize}&offset=${offset}&matched_only=${state.tendersFilterMatched}`;
@@ -216,7 +219,7 @@ async function loadTendersData() {
 
         tbody.innerHTML = '';
         if (!data.items || data.items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Тендеры не найдены по заданным критериям</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Тендеры не найдены по заданным критериям</td></tr>';
             document.getElementById('btn-next-page').disabled = true;
             return;
         }
@@ -232,10 +235,14 @@ async function loadTendersData() {
                 badgeClass = 'badge-expired';
             }
 
+            const sourceName = tender.source_name || tender.source || '-';
+            const sourceCode = tender.source || 'unknown';
+
             tr.innerHTML = `
                 <td>#${tender.id}</td>
                 <td><div class="tender-title-column">${tender.title}</div></td>
                 <td><div class="tender-customer-column">${tender.customer_name || '-'}</div></td>
+                <td><span class="source-tag source-${sourceCode}">${sourceName}</span></td>
                 <td>${formatDate(tender.deadline_at)}</td>
                 <td>${formatPrice(tender.estimated_value)}</td>
                 <td><span class="badge ${badgeClass}">${statusText}</span></td>
@@ -255,7 +262,7 @@ async function loadTendersData() {
         document.getElementById('page-indicator').textContent = `Страница ${state.tendersPage}`;
 
     } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">Ошибка загрузки: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Ошибка загрузки: ${err.message}</td></tr>`;
         console.error(err);
     }
 }
@@ -388,6 +395,7 @@ async function viewTenderDetails(tenderId) {
 
         document.getElementById('modal-tender-title').textContent = tender.title;
         document.getElementById('modal-tender-customer').textContent = tender.customer_name || 'Не указан';
+        document.getElementById('modal-tender-source').textContent = tender.source_name || tender.source || 'Не указан';
         document.getElementById('modal-tender-deadline').textContent = formatDate(tender.deadline_at);
         document.getElementById('modal-tender-value').textContent = formatPrice(tender.estimated_value);
         
