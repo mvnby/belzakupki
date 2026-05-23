@@ -154,3 +154,44 @@ def send_notifications() -> None:
     with SessionLocal() as session:
         count = dispatch_notifications(session)
     print(f"Notification dispatch complete. Sent messages for {count} matches.")
+
+
+def ingest_icetrade() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--search-preset",
+        choices=("hvac-vitebsk",),
+        default=None,
+        help="Use a predefined icetrade.by search instead of the full list.",
+    )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Send notifications immediately after ingest.",
+    )
+    args = parser.parse_args()
+
+    from worker.ingest import ingest_icetrade_tenders
+
+    with SessionLocal() as session:
+        stats = ingest_icetrade_tenders(
+            session,
+            limit=args.limit,
+            search_preset=args.search_preset,
+        )
+
+        print(
+            "Icetrade Ingest done: "
+            f"fetched={stats.fetched} "
+            f"created={stats.created} "
+            f"updated={stats.updated} "
+            f"matches={stats.matches}"
+        )
+
+        if args.notify:
+            from worker.notifications import dispatch_notifications
+            print("Sending notifications...")
+            count = dispatch_notifications(session)
+            print(f"Sent messages for {count} matches.")
+

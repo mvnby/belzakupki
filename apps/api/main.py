@@ -40,10 +40,11 @@ def run_ingest_task():
         task_status["ingest"] = "running"
     try:
         from belzakupki_db.session import SessionLocal
-        from worker.ingest import ingest_goszakupki_tenders
+        from worker.ingest import ingest_goszakupki_tenders, ingest_icetrade_tenders
         with SessionLocal() as session:
             # Импортируем с дефолтным пресетом
             ingest_goszakupki_tenders(session, search_preset="hvac-vitebsk", limit=20)
+            ingest_icetrade_tenders(session, search_preset="hvac-vitebsk", limit=20)
     except Exception as e:
         print(f"Error during background ingest: {e}")
     finally:

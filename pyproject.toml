@@ -26,9 +26,11 @@ dependencies = [
 [project.scripts]
 belzakupki-seed = "worker.cli:seed"
 belzakupki-ingest-goszakupki = "worker.cli:ingest_goszakupki"
+belzakupki-ingest-icetrade = "worker.cli:ingest_icetrade"
 belzakupki-list-tenders = "worker.cli:show_tenders"
 belzakupki-list-matches = "worker.cli:show_matches"
 belzakupki-send-notifications = "worker.cli:send_notifications"
+
 
 [tool.setuptools.packages.find]
 where = ["packages/db", "apps/worker/src"]

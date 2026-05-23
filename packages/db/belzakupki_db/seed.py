@@ -41,6 +41,15 @@ def seed_tender_sources(session: Session) -> None:
         )
         session.add(source)
 
+    icetrade_source = session.query(TenderSource).filter_by(code="icetrade_by").one_or_none()
+    if icetrade_source is None:
+        icetrade_source = TenderSource(
+            code="icetrade_by",
+            name="ИС Тендеры (icetrade.by)",
+            base_url="https://icetrade.by",
+        )
+        session.add(icetrade_source)
+
 
 def seed_search_profiles(session: Session) -> None:
     profile = session.query(SearchProfile).filter_by(name=HVAC_PROFILE_NAME).one_or_none()
