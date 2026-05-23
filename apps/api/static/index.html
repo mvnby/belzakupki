@@ -107,6 +107,7 @@
                                         <tr>
                                             <th>ID</th>
                                             <th>Название тендера</th>
+                                            <th>Источник</th>
                                             <th>Профиль</th>
                                             <th>Скоринг</th>
                                             <th>Статус</th>
@@ -115,7 +116,7 @@
                                     </thead>
                                     <tbody id="recent-matches-body">
                                         <tr>
-                                            <td colspan="6" class="text-center text-muted">Загрузка данных...</td>
+                                            <td colspan="7" class="text-center text-muted">Загрузка данных...</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -151,6 +152,7 @@
                                     <th>ID</th>
                                     <th>Название</th>
                                     <th>Заказчик</th>
+                                    <th>Источник</th>
                                     <th>Дедлайн</th>
                                     <th>Стоимость</th>
                                     <th>Статус</th>
@@ -159,7 +161,7 @@
                             </thead>
                             <tbody id="tenders-table-body">
                                 <tr>
-                                    <td colspan="7" class="text-center text-muted">Загрузка списка тендеров...</td>
+                                    <td colspan="8" class="text-center text-muted">Загрузка списка тендеров...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -273,6 +275,61 @@
                         <p class="form-help">Тендер пропускается, если в нем содержится хотя бы одно из этих исключающих слов.</p>
                     </div>
 
+                    <div class="form-group">
+                        <label>Регионы поиска (если не выбраны — поиск по всей стране)</label>
+                        <div class="regions-grid">
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="1">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Брестская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="2">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Витебская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="3">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Гомельская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="4">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Гродненская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="5">
+                                <span class="checkmark"></span>
+                                <span class="region-label">г. Минск</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="6">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Минская</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" name="form-profile-region" value="7">
+                                <span class="checkmark"></span>
+                                <span class="region-label">Могилевская</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group-row-2col">
+                        <div class="form-group">
+                            <label>Коды отраслей (для госзакупок, e.g. 189)</label>
+                            <div class="tags-input-container">
+                                <div class="tags-list" id="categories-tags-list"></div>
+                                <input type="text" id="input-category-tag" placeholder="Нажмите Enter...">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="form-profile-min-score">Минимальный скоринг</label>
+                            <input type="number" id="form-profile-min-score" min="0" max="100" step="10" value="0">
+                        </div>
+                    </div>
+
                     <div class="form-group-row">
                         <label class="checkbox-container">
                             <input type="checkbox" id="form-profile-active" checked>
@@ -317,6 +374,7 @@
                 <div class="tender-modal-details">
                     <div class="details-section">
                         <div class="details-row"><strong>Заказчик:</strong> <span id="modal-tender-customer">-</span></div>
+                        <div class="details-row"><strong>Источник:</strong> <span id="modal-tender-source">-</span></div>
                         <div class="details-row"><strong>Дедлайн:</strong> <span id="modal-tender-deadline">-</span></div>
                         <div class="details-row"><strong>Стоимость:</strong> <span id="modal-tender-value">-</span></div>
                         <div class="details-row"><strong>Оригинальная ссылка:</strong> <a href="#" id="modal-tender-link" target="_blank">Открыть первоисточник <i class="fa-solid fa-arrow-up-right-from-square"></i></a></div>

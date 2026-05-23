@@ -11,7 +11,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch
+from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> None:
@@ -40,6 +40,7 @@ def format_tender_message(match: TenderMatch) -> str:
     
     title = html.escape(tender.title)
     customer = html.escape(tender.customer_name or "Не указан")
+    source_name = html.escape(tender.source.name if tender.source else "Неизвестный источник")
     profile_name = html.escape(profile.name)
     keywords = html.escape(", ".join(match.matched_keywords))
     
@@ -53,6 +54,7 @@ def format_tender_message(match: TenderMatch) -> str:
         "",
         f"📄 <b>Название:</b> {title}",
         f"🏢 <b>Заказчик:</b> {customer}",
+        f"🌐 <b>Источник:</b> {source_name}",
         f"🎯 <b>Профиль поиска:</b> {profile_name} (Скоринг: {match.score})",
         f"🏷️ <b>Ключевые слова:</b> {keywords}",
         f"💰 <b>Стоимость:</b> {estimated_value}",
@@ -71,7 +73,7 @@ def dispatch_notifications(session: Session) -> int:
     stmt = (
         select(TenderMatch)
         .options(
-            joinedload(TenderMatch.tender),
+            joinedload(TenderMatch.tender).joinedload(Tender.source),
             joinedload(TenderMatch.profile),
         )
         .where(TenderMatch.status == "new")

@@ -41,9 +41,28 @@ def seed_tender_sources(session: Session) -> None:
         )
         session.add(source)
 
+    icetrade_source = session.query(TenderSource).filter_by(code="icetrade_by").one_or_none()
+    if icetrade_source is None:
+        icetrade_source = TenderSource(
+            code="icetrade_by",
+            name="ИС Тендеры (icetrade.by)",
+            base_url="https://icetrade.by",
+        )
+        session.add(icetrade_source)
+
 
 def seed_search_profiles(session: Session) -> None:
     profile = session.query(SearchProfile).filter_by(name=HVAC_PROFILE_NAME).one_or_none()
+
+    hvac_categories = [
+        "189",
+        "43.22.12.190",
+        "43.22.12.290",
+        "28.25.12.200",
+        "28.25.12.400",
+        "28.25.20.000",
+        "28.99.39.800"
+    ]
 
     if profile is None:
         profile = SearchProfile(
@@ -51,6 +70,9 @@ def seed_search_profiles(session: Session) -> None:
             description="Закупки по кондиционерам, вентиляции и климатическому оборудованию.",
             keywords=HVAC_KEYWORDS,
             negative_keywords=HVAC_NEGATIVE_KEYWORDS,
+            regions=["2"],
+            categories=hvac_categories,
+            min_score=20.0,
             is_active=True,
         )
         session.add(profile)
@@ -58,6 +80,9 @@ def seed_search_profiles(session: Session) -> None:
 
     profile.keywords = HVAC_KEYWORDS
     profile.negative_keywords = HVAC_NEGATIVE_KEYWORDS
+    profile.regions = ["2"]
+    profile.categories = hvac_categories
+    profile.min_score = 20.0
     profile.is_active = True
 
 

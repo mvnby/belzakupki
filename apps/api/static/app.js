@@ -12,7 +12,18 @@ const state = {
     editingProfile: null, // Holds profile object when editing, or null for new profile
     editingKeywords: [],
     editingNegativeKeywords: [],
+    editingCategories: [],
     pollingInterval: null
+};
+
+const REGION_NAMES = {
+    '1': 'Брестская область',
+    '2': 'Витебская область',
+    '3': 'Гомельская область',
+    '4': 'Гродненская область',
+    '5': 'г. Минск',
+    '6': 'Минская область',
+    '7': 'Могилевская область'
 };
 
 // --- DOM Elements ---
@@ -177,15 +188,18 @@ async function loadOverviewData() {
         tbody.innerHTML = '';
 
         if (!matchesData.items || matchesData.items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Новых совпадений пока не найдено. Запустите импорт.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Новых совпадений пока не найдено. Запустите импорт.</td></tr>';
             return;
         }
 
         matchesData.items.forEach(match => {
             const tr = document.createElement('tr');
+            const sourceName = match.tender.source_name || match.tender.source || '-';
+            const sourceCode = match.tender.source || 'unknown';
             tr.innerHTML = `
                 <td>#${match.id}</td>
                 <td><a href="#" class="btn-link text-left" onclick="viewTenderDetails(${match.tender.id}); return false;">${match.tender.title}</a></td>
+                <td><span class="source-tag source-${sourceCode}">${sourceName}</span></td>
                 <td>${match.profile.name}</td>
                 <td><strong>${match.score}</strong></td>
                 <td><span class="badge badge-${match.status}">${match.status === 'new' ? 'новый' : match.status === 'processed' ? 'отправлен' : 'просрочен'}</span></td>
@@ -201,7 +215,7 @@ async function loadOverviewData() {
 // --- View: Tenders Load ---
 async function loadTendersData() {
     const tbody = document.getElementById('tenders-table-body');
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Загрузка списка тендеров...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Загрузка списка тендеров...</td></tr>';
 
     const offset = (state.tendersPage - 1) * state.tendersPageSize;
     let url = `/tenders?limit=${state.tendersPageSize}&offset=${offset}&matched_only=${state.tendersFilterMatched}`;
@@ -216,7 +230,7 @@ async function loadTendersData() {
 
         tbody.innerHTML = '';
         if (!data.items || data.items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Тендеры не найдены по заданным критериям</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Тендеры не найдены по заданным критериям</td></tr>';
             document.getElementById('btn-next-page').disabled = true;
             return;
         }
@@ -232,10 +246,14 @@ async function loadTendersData() {
                 badgeClass = 'badge-expired';
             }
 
+            const sourceName = tender.source_name || tender.source || '-';
+            const sourceCode = tender.source || 'unknown';
+
             tr.innerHTML = `
                 <td>#${tender.id}</td>
                 <td><div class="tender-title-column">${tender.title}</div></td>
                 <td><div class="tender-customer-column">${tender.customer_name || '-'}</div></td>
+                <td><span class="source-tag source-${sourceCode}">${sourceName}</span></td>
                 <td>${formatDate(tender.deadline_at)}</td>
                 <td>${formatPrice(tender.estimated_value)}</td>
                 <td><span class="badge ${badgeClass}">${statusText}</span></td>
@@ -255,7 +273,7 @@ async function loadTendersData() {
         document.getElementById('page-indicator').textContent = `Страница ${state.tendersPage}`;
 
     } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">Ошибка загрузки: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Ошибка загрузки: ${err.message}</td></tr>`;
         console.error(err);
     }
 }
@@ -289,6 +307,15 @@ async function loadProfilesData() {
             const keywordsHTML = profile.keywords.map(kw => `<span class="tag-badge">${kw}</span>`).join('') || '<span class="text-muted">Нет</span>';
             const negKeywordsHTML = profile.negative_keywords.map(kw => `<span class="tag-badge neg">${kw}</span>`).join('') || '<span class="text-muted">Нет</span>';
             
+            // Format regions and categories preview
+            const regionsText = profile.regions && profile.regions.length > 0 
+                ? profile.regions.map(r => REGION_NAMES[r] || r).join(', ')
+                : 'Все регионы';
+            const categoriesHTML = profile.categories && profile.categories.length > 0
+                ? profile.categories.map(c => `<span class="tag-badge cat">${c}</span>`).join('')
+                : '<span class="text-muted">Все отрасли</span>';
+            const minScoreHTML = `Порог: <strong>${profile.min_score || 0}</strong> баллов`;
+
             // Channel indicator
             let channelIndicatorHTML = '<span class="text-muted" style="font-size:13px;"><i class="fa-solid fa-bell-slash"></i> Telegram выключен</span>';
             if (telegramChannel && telegramChannel.is_active) {
@@ -313,6 +340,22 @@ async function loadProfilesData() {
                 <div>
                     <h4 class="profile-meta-title">Исключающие слова</h4>
                     <div class="profile-keywords-preview">${negKeywordsHTML}</div>
+                </div>
+
+                <div class="profile-meta-row-2col">
+                    <div>
+                        <h4 class="profile-meta-title">Регионы поиска</h4>
+                        <div style="font-size:13px; color:var(--text-secondary);">${regionsText}</div>
+                    </div>
+                    <div>
+                        <h4 class="profile-meta-title">Минимальный скоринг</h4>
+                        <div style="font-size:13px; color:var(--text-secondary);">${minScoreHTML}</div>
+                    </div>
+                </div>
+
+                <div>
+                    <h4 class="profile-meta-title">Коды отраслей</h4>
+                    <div class="profile-keywords-preview">${categoriesHTML}</div>
                 </div>
 
                 <div>
@@ -388,6 +431,7 @@ async function viewTenderDetails(tenderId) {
 
         document.getElementById('modal-tender-title').textContent = tender.title;
         document.getElementById('modal-tender-customer').textContent = tender.customer_name || 'Не указан';
+        document.getElementById('modal-tender-source').textContent = tender.source_name || tender.source || 'Не указан';
         document.getElementById('modal-tender-deadline').textContent = formatDate(tender.deadline_at);
         document.getElementById('modal-tender-value').textContent = formatPrice(tender.estimated_value);
         
@@ -410,6 +454,7 @@ function openCreateProfileModal() {
     state.editingProfile = null;
     state.editingKeywords = [];
     state.editingNegativeKeywords = [];
+    state.editingCategories = [];
     
     document.getElementById('modal-profile-title').textContent = 'Создать новый профиль поиска';
     document.getElementById('form-profile-id').value = '';
@@ -418,9 +463,13 @@ function openCreateProfileModal() {
     document.getElementById('form-profile-active').checked = true;
     document.getElementById('form-channel-active').checked = true;
     document.getElementById('form-telegram-chat').value = '';
+    document.getElementById('form-profile-min-score').value = 0;
+    
+    document.querySelectorAll('input[name="form-profile-region"]').forEach(cb => cb.checked = false);
     
     renderTags('keywords');
     renderTags('negative');
+    renderTags('categories');
     
     document.getElementById('profile-modal').style.display = 'flex';
 }
@@ -432,12 +481,19 @@ async function openEditProfileModal(profileId) {
     state.editingProfile = profile;
     state.editingKeywords = [...profile.keywords];
     state.editingNegativeKeywords = [...profile.negative_keywords];
+    state.editingCategories = [...(profile.categories || [])];
 
     document.getElementById('modal-profile-title').textContent = 'Редактировать профиль поиска';
     document.getElementById('form-profile-id').value = profile.id;
     document.getElementById('form-profile-name').value = profile.name;
     document.getElementById('form-profile-description').value = profile.description || '';
     document.getElementById('form-profile-active').checked = profile.is_active;
+    document.getElementById('form-profile-min-score').value = profile.min_score || 0;
+
+    // Fill regions checkboxes
+    document.querySelectorAll('input[name="form-profile-region"]').forEach(cb => {
+        cb.checked = profile.regions && profile.regions.includes(cb.value);
+    });
 
     // Load channel info
     try {
@@ -458,18 +514,26 @@ async function openEditProfileModal(profileId) {
 
     renderTags('keywords');
     renderTags('negative');
+    renderTags('categories');
 
     document.getElementById('profile-modal').style.display = 'flex';
 }
 
 function renderTags(type) {
-    const container = document.getElementById(type === 'keywords' ? 'keywords-tags-list' : 'negative-tags-list');
-    const tagsList = type === 'keywords' ? state.editingKeywords : state.editingNegativeKeywords;
+    const container = document.getElementById(
+        type === 'keywords' ? 'keywords-tags-list' : 
+        type === 'negative' ? 'negative-tags-list' : 
+        'categories-tags-list'
+    );
+    const tagsList = 
+        type === 'keywords' ? state.editingKeywords : 
+        type === 'negative' ? state.editingNegativeKeywords : 
+        state.editingCategories;
     
     container.innerHTML = '';
     tagsList.forEach((tag, idx) => {
         const item = document.createElement('div');
-        item.className = `tag-item ${type === 'negative' ? 'neg' : ''}`;
+        item.className = `tag-item ${type === 'negative' ? 'neg' : type === 'categories' ? 'cat' : ''}`;
         item.innerHTML = `
             <span>${tag}</span>
             <button type="button" class="tag-remove-btn" onclick="removeTag('${type}', ${idx})">&times;</button>
@@ -482,7 +546,10 @@ function addTag(type, value) {
     const val = value.trim();
     if (!val) return;
     
-    const tagsList = type === 'keywords' ? state.editingKeywords : state.editingNegativeKeywords;
+    const tagsList = 
+        type === 'keywords' ? state.editingKeywords : 
+        type === 'negative' ? state.editingNegativeKeywords : 
+        state.editingCategories;
     if (!tagsList.includes(val)) {
         tagsList.push(val);
         renderTags(type);
@@ -490,7 +557,10 @@ function addTag(type, value) {
 }
 
 function removeTag(type, index) {
-    const tagsList = type === 'keywords' ? state.editingKeywords : state.editingNegativeKeywords;
+    const tagsList = 
+        type === 'keywords' ? state.editingKeywords : 
+        type === 'negative' ? state.editingNegativeKeywords : 
+        state.editingCategories;
     tagsList.splice(index, 1);
     renderTags(type);
 }
@@ -505,11 +575,17 @@ async function saveProfile() {
         return;
     }
 
+    const selectedRegions = Array.from(document.querySelectorAll('input[name="form-profile-region"]:checked')).map(cb => cb.value);
+    const minScore = parseFloat(document.getElementById('form-profile-min-score').value) || 0;
+
     const payload = {
         name,
         description: description || null,
         keywords: state.editingKeywords,
         negative_keywords: state.editingNegativeKeywords,
+        regions: selectedRegions,
+        categories: state.editingCategories,
+        min_score: minScore,
         is_active
     };
 
@@ -632,6 +708,15 @@ function setupEventListeners() {
             e.preventDefault();
             addTag('negative', inputNegative.value);
             inputNegative.value = '';
+        }
+    });
+
+    const inputCategory = document.getElementById('input-category-tag');
+    inputCategory.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addTag('categories', inputCategory.value);
+            inputCategory.value = '';
         }
     });
 

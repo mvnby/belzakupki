@@ -10,11 +10,10 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-BASE_URL = "https://goszakupki.by"
-URL = f"{BASE_URL}/tenders/posted"
+BASE_URL = "https://icetrade.by"
+URL = f"{BASE_URL}/search/auctions"
 USER_AGENT = "belzakupki/0.1 (+https://github.com/mvnby/belzakupki)"
 VITEBSK_REGION_ID = "2"
-HVAC_INDUSTRY_ID = "189"
 HVAC_VITEBSK_TERMS = (
     "кондиционер",
     "сплит-система",
@@ -24,10 +23,9 @@ HVAC_VITEBSK_TERMS = (
 
 
 @dataclass(frozen=True)
-class GoszakupkiSearch:
+class IcetradeSearch:
     text: str | None = None
     regions: tuple[str, ...] = ()
-    industry: str | None = None
     okrb: str | None = None
 
     @property
@@ -39,9 +37,6 @@ class GoszakupkiSearch:
 
         if self.regions:
             parts.append("regions=" + ",".join(self.regions))
-
-        if self.industry:
-            parts.append(f"industry={self.industry}")
 
         if self.okrb:
             parts.append(f"okrb={self.okrb}")
@@ -68,57 +63,59 @@ def extract_external_id(url: str) -> str:
 
 def should_verify_ssl() -> bool:
     value = os.getenv("GOSZAKUPKI_VERIFY_SSL", "true").casefold()
-
     return value not in {"0", "false", "no"}
 
 
 def build_headers() -> dict[str, str]:
     headers = {"User-Agent": USER_AGENT}
-    cookie = os.getenv("GOSZAKUPKI_COOKIE")
-
-    if cookie:
-        headers["Cookie"] = cookie
-
     return headers
 
 
-def build_search_params(search: GoszakupkiSearch | None) -> list[tuple[str, str]]:
-    if search is None:
-        return []
+def build_search_params(search: IcetradeSearch | None) -> list[tuple[str, str]]:
+    params = [
+        ("search", "Найти"),
+        ("zakup_type[1]", "1"),
+        ("zakup_type[2]", "1"),
+        ("t[Trade]", "1"),
+        ("t[eTrade]", "1"),
+        ("t[Request]", "1"),
+        ("t[singleSource]", "1"),
+        ("t[Auction]", "1"),
+        ("t[Other]", "1"),
+        ("t[contractingTrades]", "1"),
+        ("t[socialOrder]", "1"),
+        ("t[negotiations]", "1"),
+        ("sort", "num:desc"),
+        ("onPage", "20"),
+    ]
 
-    params: list[tuple[str, str]] = []
-
-    if search.text:
-        params.append(("TendersSearch[text]", search.text))
-
-    for region in search.regions:
-        # Map canonical region code to goszakupki code
-        # Canonical: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk City, '6'=Minsk Region, '7'=Mogilev
-        # Goszakupki: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk Region, '6'=Mogilev, '7'=Minsk City
-        mapped_region = region
-        if region == '5':
-            mapped_region = '7'
-        elif region == '6':
-            mapped_region = '5'
-        elif region == '7':
-            mapped_region = '6'
-        params.append(("TendersSearch[region][]", mapped_region))
-
-    if search.industry:
-        params.append(("TendersSearch[industry]", search.industry))
-
-    if search.okrb:
-        params.append(("TendersSearch[okrb]", search.okrb))
+    if search:
+        if search.text:
+            params.append(("search_text", search.text))
+        if search.okrb:
+            params.append(("okrb", search.okrb))
+        for region in search.regions:
+            # Map canonical region code to icetrade code
+            # Canonical: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk City, '6'=Minsk Region, '7'=Mogilev
+            # Icetrade: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Mogilev, '6'=Minsk Region, '7'=Minsk City
+            mapped_region = region
+            if region == '5':
+                mapped_region = '7'
+            elif region == '6':
+                mapped_region = '6'
+            elif region == '7':
+                mapped_region = '5'
+            params.append((f"r[{mapped_region}]", mapped_region))
+    else:
+        # Если поиск не задан, ищем по всем регионам
+        for r in range(1, 8):
+            params.append((f"r[{r}]", str(r)))
 
     return params
 
 
-def build_search_url(search: GoszakupkiSearch | None) -> str:
+def build_search_url(search: IcetradeSearch | None) -> str:
     params = build_search_params(search)
-
-    if not params:
-        return URL
-
     return f"{URL}?{urlencode(params)}"
 
 
@@ -131,54 +128,58 @@ def parse_tenders_html(
     *,
     limit: int | None = None,
     base_url: str = BASE_URL,
-    search: GoszakupkiSearch | None = None,
+    search: IcetradeSearch | None = None,
 ) -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
     tenders: list[dict] = []
 
-    rows = soup.select("table tbody tr")
+    # Находим таблицу с тендерами
+    table = soup.select_one("table#auctions-list")
+    if not table:
+        return tenders
 
+    rows = table.select("tr")
     for row in rows:
+        # Пропускаем строку заголовка (она содержит th)
+        if row.find("th"):
+            continue
+
         cols = row.find_all("td")
-
-        if len(cols) < 2:
+        if len(cols) < 6:
             continue
 
-        number_text = cols[0].get_text("\n", strip=True)
-        details_text = cols[1].get_text("\n", strip=True)
-        link_tag = cols[1].find("a")
-
-        if not details_text or link_tag is None or not link_tag.get("href"):
+        link_tag = cols[0].find("a")
+        if not link_tag or not link_tag.get("href"):
             continue
 
+        # Убираем подсветку
         for highlight in link_tag.select(".hlt"):
             highlight.unwrap()
 
         title = normalize_html_text(link_tag.get_text("", strip=False))
         url = urljoin(base_url, link_tag["href"])
-        details_lines = [line for line in details_text.splitlines() if line.strip()]
+        
+        customer_name = normalize_html_text(cols[1].get_text(" ", strip=True))
+        source_number = normalize_html_text(cols[3].get_text(" ", strip=True))
+        
+        estimated_value = normalize_html_text(cols[4].get_text(" ", strip=True))
+        deadline = normalize_html_text(cols[5].get_text(" ", strip=True))
 
         tenders.append(
             {
                 "external_id": extract_external_id(url),
                 "title": title,
-                "customer_name": details_lines[0] if details_lines else None,
+                "customer_name": customer_name,
                 "url": url,
-                "status": (
-                    cols[3].get_text(" ", strip=True) if len(cols) > 3 else "posted"
-                ),
-                "source_number": number_text.splitlines()[0] if number_text else None,
-                "procedure_type": (
-                    cols[2].get_text(" ", strip=True) if len(cols) > 2 else None
-                ),
-                "deadline": cols[4].get_text(" ", strip=True) if len(cols) > 4 else None,
-                "estimated_value": (
-                    cols[5].get_text(" ", strip=True) if len(cols) > 5 else None
-                ),
+                "status": "posted",
+                "source_number": source_number,
+                "procedure_type": "Закупка Icetrade",
+                "deadline": deadline,
+                "estimated_value": estimated_value,
                 "search": search.label if search else None,
                 "search_text": search.text if search else None,
                 "search_regions": list(search.regions) if search else [],
-                "search_industry": search.industry if search else None,
+                "search_industry": None,
             }
         )
 
@@ -191,7 +192,7 @@ def parse_tenders_html(
 def fetch_tenders(
     limit: int | None = None,
     *,
-    search: GoszakupkiSearch | None = None,
+    search: IcetradeSearch | None = None,
     verify_ssl: bool | None = None,
 ) -> list[dict]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
@@ -202,20 +203,14 @@ def fetch_tenders(
         timeout=10,
         verify=verify,
     ) as client:
-        client.get(BASE_URL).raise_for_status()
         response = client.get(build_search_url(search))
         response.raise_for_status()
-
-        if response.url.path == "/site/login":
-            raise RuntimeError(
-                "goszakupki.by redirected to login after session warm-up"
-            )
 
         return parse_tenders_html(response.text, limit=limit, search=search)
 
 
 def fetch_tenders_for_searches(
-    searches: Iterable[GoszakupkiSearch],
+    searches: Iterable[IcetradeSearch],
     *,
     limit: int | None = None,
     verify_ssl: bool | None = None,
@@ -230,21 +225,13 @@ def fetch_tenders_for_searches(
         timeout=10,
         verify=verify,
     ) as client:
-        client.get(BASE_URL).raise_for_status()
-
         for search in searches:
             remaining = None if limit is None else limit - len(tenders)
-
             if remaining is not None and remaining <= 0:
                 break
 
             response = client.get(build_search_url(search))
             response.raise_for_status()
-
-            if response.url.path == "/site/login":
-                raise RuntimeError(
-                    "goszakupki.by redirected to login after session warm-up"
-                )
 
             items = parse_tenders_html(
                 response.text,
@@ -253,7 +240,6 @@ def fetch_tenders_for_searches(
 
             for item in items:
                 external_id = item["external_id"]
-
                 if external_id in seen_external_ids:
                     continue
 
@@ -266,15 +252,11 @@ def fetch_tenders_for_searches(
     return tenders
 
 
-def build_hvac_vitebsk_searches() -> list[GoszakupkiSearch]:
+def build_hvac_vitebsk_searches() -> list[IcetradeSearch]:
     searches = [
-        GoszakupkiSearch(text=term, regions=(VITEBSK_REGION_ID,))
+        IcetradeSearch(text=term, regions=(VITEBSK_REGION_ID,))
         for term in HVAC_VITEBSK_TERMS
     ]
-    searches.append(
-        GoszakupkiSearch(regions=(VITEBSK_REGION_ID,), industry=HVAC_INDUSTRY_ID)
-    )
-
     return searches
 
 
@@ -290,28 +272,24 @@ def fetch_hvac_vitebsk_tenders(
     )
 
 
-def build_dynamic_searches(profiles: Iterable[Any]) -> list[GoszakupkiSearch]:
+def build_dynamic_searches(profiles: Iterable[Any]) -> list[IcetradeSearch]:
     searches = []
     for profile in profiles:
         regions = tuple(profile.regions) if profile.regions else ()
         
+        # Фильтруем только коды ОКРБ (содержащие точки)
         okrb_codes = [c for c in (profile.categories or []) if "." in c]
-        industry_codes = [c for c in (profile.categories or []) if "." not in c]
         
         # 1. Поиски по кодам ОКРБ
         for okrb in okrb_codes:
-            searches.append(GoszakupkiSearch(okrb=okrb, regions=regions))
+            searches.append(IcetradeSearch(okrb=okrb, regions=regions))
             
-        # 2. Поиски по отраслям (устаревшие коды ИД)
-        for ind in industry_codes:
-            searches.append(GoszakupkiSearch(industry=ind, regions=regions))
-            
-        # 3. Поиски по ключевым словам (как дополнение)
+        # 2. Поиски по ключевым словам (как дополнение)
         for kw in (profile.keywords or []):
-            searches.append(GoszakupkiSearch(text=kw, regions=regions))
+            searches.append(IcetradeSearch(text=kw, regions=regions))
     
     if not searches:
-        searches.append(GoszakupkiSearch())
+        searches.append(IcetradeSearch())
     return searches
 
 

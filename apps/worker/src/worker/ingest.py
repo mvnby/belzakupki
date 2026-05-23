@@ -35,18 +35,18 @@ def content_hash(value: dict[str, Any]) -> str:
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
-def get_or_create_source(session: Session) -> TenderSource:
+def get_or_create_source(session: Session, code: str, name: str, base_url: str) -> TenderSource:
     source = session.execute(
-        select(TenderSource).where(TenderSource.code == SOURCE_CODE)
+        select(TenderSource).where(TenderSource.code == code)
     ).scalar_one_or_none()
 
     if source is not None:
         return source
 
     source = TenderSource(
-        code=SOURCE_CODE,
-        name=SOURCE_NAME,
-        base_url=BASE_URL,
+        code=code,
+        name=name,
+        base_url=base_url,
         is_active=True,
     )
     session.add(source)
@@ -56,7 +56,7 @@ def get_or_create_source(session: Session) -> TenderSource:
     except IntegrityError:
         session.rollback()
         source = session.execute(
-            select(TenderSource).where(TenderSource.code == SOURCE_CODE)
+            select(TenderSource).where(TenderSource.code == code)
         ).scalar_one()
 
     return source
@@ -148,7 +148,8 @@ def score_tender(session: Session, tender: Tender) -> int:
     for profile in profiles:
         result = score_text(text, profile.keywords, profile.negative_keywords)
 
-        if result.score <= 0:
+        min_score = profile.min_score or 0.0
+        if result.score <= 0 or result.score < min_score:
             continue
 
         match = session.execute(
@@ -181,18 +182,78 @@ def score_tender(session: Session, tender: Tender) -> int:
 def ingest_goszakupki_tenders(
     session: Session,
     *,
+    profiles: list[SearchProfile] | None = None,
     limit: int | None = None,
     search_preset: str | None = None,
     commit: bool = True,
 ) -> IngestStats:
-    source = get_or_create_source(session)
+    source = get_or_create_source(session, SOURCE_CODE, SOURCE_NAME, BASE_URL)
 
-    if search_preset == "hvac-vitebsk":
+    if profiles is not None:
+        from worker.sources.goszakupki_by import fetch_dynamic_tenders
+        items = fetch_dynamic_tenders(profiles, limit=limit)
+    elif search_preset == "hvac-vitebsk":
         items = fetch_hvac_vitebsk_tenders(limit=limit)
     elif search_preset is None:
         items = fetch_tenders(limit=limit)
     else:
         raise ValueError(f"Unknown goszakupki search preset: {search_preset}")
+
+    created = 0
+    updated = 0
+    matches = 0
+
+    for item in items:
+        tender, was_created = upsert_tender(session, source, item)
+
+        if was_created:
+            created += 1
+        else:
+            updated += 1
+
+        matches += score_tender(session, tender)
+
+    if commit:
+        session.commit()
+
+    return IngestStats(
+        fetched=len(items),
+        created=created,
+        updated=updated,
+        matches=matches,
+    )
+
+
+def ingest_icetrade_tenders(
+    session: Session,
+    *,
+    profiles: list[SearchProfile] | None = None,
+    limit: int | None = None,
+    search_preset: str | None = None,
+    commit: bool = True,
+) -> IngestStats:
+    from worker.sources.icetrade_by import (
+        BASE_URL as ICETRADE_BASE_URL,
+        fetch_hvac_vitebsk_tenders as fetch_icetrade_hvac,
+        fetch_tenders as fetch_icetrade,
+        fetch_dynamic_tenders as fetch_icetrade_dynamic,
+    )
+
+    source = get_or_create_source(
+        session,
+        "icetrade_by",
+        "ИС Тендеры (icetrade.by)",
+        ICETRADE_BASE_URL,
+    )
+
+    if profiles is not None:
+        items = fetch_icetrade_dynamic(profiles, limit=limit)
+    elif search_preset == "hvac-vitebsk":
+        items = fetch_icetrade_hvac(limit=limit)
+    elif search_preset is None:
+        items = fetch_icetrade(limit=limit)
+    else:
+        raise ValueError(f"Unknown icetrade search preset: {search_preset}")
 
     created = 0
     updated = 0
