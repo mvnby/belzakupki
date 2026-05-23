@@ -314,7 +314,10 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
     os.makedirs(temp_dir, exist_ok=True)
 
     from worker.analyzer.text_extractor import extract_text_from_file
-    from worker.analyzer.deepseek_client import analyze_tender_relevance
+    from worker.analyzer.deepseek_client import (
+        analyze_relevance_by_metadata,
+        analyze_tender_relevance,
+    )
 
     if source_code == "goszakupki_by":
         from worker.sources.goszakupki_by import fetch_tender_attachments
@@ -329,6 +332,32 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         logger.info(f"AI Analyzing match {match.id} (Tender: {tender.title})")
 
         try:
+            # Stage 1: Metadata-based relevance check
+            metadata_analysis = analyze_relevance_by_metadata(
+                title=tender.title,
+                customer=tender.customer_name or "Не указан",
+                description=tender.description,
+            )
+
+            if metadata_analysis is None:
+                logger.warning(f"DeepSeek metadata analysis returned None for match {match.id}. Skipping for now.")
+                continue
+
+            is_relevant = metadata_analysis.get("relevant", False)
+            if not is_relevant:
+                logger.info(f"Tender {tender.id} rejected by AI Stage 1 (metadata). Explanation: {metadata_analysis.get('explanation')}")
+                match.ai_relevance = False
+                match.ai_analysis = {
+                    "relevant": False,
+                    "explanation": metadata_analysis.get("explanation", "Отклонено на этапе проверки метаданных"),
+                    "stage": 1
+                }
+                match.status = "rejected_by_ai"
+                session.add(match)
+                session.flush()
+                continue
+
+            # Stage 2: Deep check with documents
             # 1. Fetch attachments
             attachments = fetch_tender_attachments(tender.url)
             logger.info(f"Found {len(attachments)} attachments for tender {tender.id}")
@@ -337,7 +366,6 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
             raw_data["attachments"] = attachments
             tender.raw_data = raw_data
             session.add(tender)
-
 
             text_content = ""
             if not attachments:

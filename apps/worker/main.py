@@ -12,6 +12,12 @@ def build_redis() -> Redis:
 
 
 def main() -> None:
+    import threading
+    from worker.telegram_bot import start_telegram_bot_listener
+    
+    bot_thread = threading.Thread(target=start_telegram_bot_listener, daemon=True)
+    bot_thread.start()
+
     redis = build_redis()
     queue = Queue("default", connection=redis)
     worker = Worker([queue])

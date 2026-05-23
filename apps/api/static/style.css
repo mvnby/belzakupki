@@ -417,6 +417,8 @@ tr:last-child td {
 .badge-ai-irrelevant { background-color: hsla(350, 75%, 50%, 0.15); color: var(--color-danger); }
 .badge-ai-pending { background-color: hsla(38, 92%, 50%, 0.15); color: var(--color-warning); }
 .badge-rejected_by_ai { background-color: hsla(350, 75%, 50%, 0.15); color: var(--color-danger); }
+.badge-accepted { background-color: hsla(142, 70%, 45%, 0.15); color: var(--color-success); }
+.badge-rejected { background-color: hsla(350, 75%, 50%, 0.15); color: var(--color-danger); }
 
 
 
