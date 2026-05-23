@@ -26,6 +26,7 @@ HVAC_VITEBSK_TERMS = (
 class IcetradeSearch:
     text: str | None = None
     regions: tuple[str, ...] = ()
+    okrb: str | None = None
 
     @property
     def label(self) -> str:
@@ -36,6 +37,9 @@ class IcetradeSearch:
 
         if self.regions:
             parts.append("regions=" + ",".join(self.regions))
+
+        if self.okrb:
+            parts.append(f"okrb={self.okrb}")
 
         return "; ".join(parts) or "posted"
 
@@ -88,8 +92,20 @@ def build_search_params(search: IcetradeSearch | None) -> list[tuple[str, str]]:
     if search:
         if search.text:
             params.append(("search_text", search.text))
+        if search.okrb:
+            params.append(("okrb", search.okrb))
         for region in search.regions:
-            params.append((f"r[{region}]", region))
+            # Map canonical region code to icetrade code
+            # Canonical: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk City, '6'=Minsk Region, '7'=Mogilev
+            # Icetrade: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Mogilev, '6'=Minsk Region, '7'=Minsk City
+            mapped_region = region
+            if region == '5':
+                mapped_region = '7'
+            elif region == '6':
+                mapped_region = '6'
+            elif region == '7':
+                mapped_region = '5'
+            params.append((f"r[{mapped_region}]", mapped_region))
     else:
         # Если поиск не задан, ищем по всем регионам
         for r in range(1, 8):
@@ -260,9 +276,16 @@ def build_dynamic_searches(profiles: Iterable[Any]) -> list[IcetradeSearch]:
     searches = []
     for profile in profiles:
         regions = tuple(profile.regions) if profile.regions else ()
-        for kw in (profile.keywords or [None]):
-            if kw is None:
-                continue
+        
+        # Фильтруем только коды ОКРБ (содержащие точки)
+        okrb_codes = [c for c in (profile.categories or []) if "." in c]
+        
+        # 1. Поиски по кодам ОКРБ
+        for okrb in okrb_codes:
+            searches.append(IcetradeSearch(okrb=okrb, regions=regions))
+            
+        # 2. Поиски по ключевым словам (как дополнение)
+        for kw in (profile.keywords or []):
             searches.append(IcetradeSearch(text=kw, regions=regions))
     
     if not searches:

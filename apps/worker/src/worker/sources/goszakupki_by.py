@@ -28,6 +28,7 @@ class GoszakupkiSearch:
     text: str | None = None
     regions: tuple[str, ...] = ()
     industry: str | None = None
+    okrb: str | None = None
 
     @property
     def label(self) -> str:
@@ -41,6 +42,9 @@ class GoszakupkiSearch:
 
         if self.industry:
             parts.append(f"industry={self.industry}")
+
+        if self.okrb:
+            parts.append(f"okrb={self.okrb}")
 
         return "; ".join(parts) or "posted"
 
@@ -88,10 +92,23 @@ def build_search_params(search: GoszakupkiSearch | None) -> list[tuple[str, str]
         params.append(("TendersSearch[text]", search.text))
 
     for region in search.regions:
-        params.append(("TendersSearch[region][]", region))
+        # Map canonical region code to goszakupki code
+        # Canonical: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk City, '6'=Minsk Region, '7'=Mogilev
+        # Goszakupki: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk Region, '6'=Mogilev, '7'=Minsk City
+        mapped_region = region
+        if region == '5':
+            mapped_region = '7'
+        elif region == '6':
+            mapped_region = '5'
+        elif region == '7':
+            mapped_region = '6'
+        params.append(("TendersSearch[region][]", mapped_region))
 
     if search.industry:
         params.append(("TendersSearch[industry]", search.industry))
+
+    if search.okrb:
+        params.append(("TendersSearch[okrb]", search.okrb))
 
     return params
 
@@ -277,12 +294,21 @@ def build_dynamic_searches(profiles: Iterable[Any]) -> list[GoszakupkiSearch]:
     searches = []
     for profile in profiles:
         regions = tuple(profile.regions) if profile.regions else ()
-        industries = profile.categories if profile.categories else [None]
-        for kw in (profile.keywords or [None]):
-            for ind in industries:
-                if kw is None and ind is None:
-                    continue
-                searches.append(GoszakupkiSearch(text=kw, regions=regions, industry=ind))
+        
+        okrb_codes = [c for c in (profile.categories or []) if "." in c]
+        industry_codes = [c for c in (profile.categories or []) if "." not in c]
+        
+        # 1. Поиски по кодам ОКРБ
+        for okrb in okrb_codes:
+            searches.append(GoszakupkiSearch(okrb=okrb, regions=regions))
+            
+        # 2. Поиски по отраслям (устаревшие коды ИД)
+        for ind in industry_codes:
+            searches.append(GoszakupkiSearch(industry=ind, regions=regions))
+            
+        # 3. Поиски по ключевым словам (как дополнение)
+        for kw in (profile.keywords or []):
+            searches.append(GoszakupkiSearch(text=kw, regions=regions))
     
     if not searches:
         searches.append(GoszakupkiSearch())
