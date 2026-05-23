@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BelZakupki | Панель управления</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <i class="fa-solid fa-wind logo-icon"></i>
+                <span class="logo-text">BelZakupki</span>
+            </div>
+            <nav class="sidebar-menu">
+                <a href="#overview" class="menu-item active" data-tab="overview">
+                    <i class="fa-solid fa-chart-simple"></i>
+                    <span>Обзор</span>
+                </a>
+                <a href="#tenders" class="menu-item" data-tab="tenders">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span>Тендеры</span>
+                </a>
+                <a href="#profiles" class="menu-item" data-tab="profiles">
+                    <i class="fa-solid fa-gears"></i>
+                    <span>Профили поиска</span>
+                </a>
+                <a href="#actions" class="menu-item" data-tab="actions">
+                    <i class="fa-solid fa-bolt"></i>
+                    <span>Действия</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="version">v0.1.0</div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="main-header">
+                <div class="header-title">
+                    <h1 id="page-title">Обзор системы</h1>
+                    <p class="subtitle" id="page-subtitle">Текущий статус мониторинга и статистика</p>
+                </div>
+                <div class="header-actions">
+                    <span class="indicator-badge" id="task-indicator">
+                        <span class="pulse-dot green"></span>
+                        <span class="indicator-text">Система активна</span>
+                    </span>
+                </div>
+            </header>
+
+            <!-- Dashboard Content Views -->
+            <div class="content-view active" id="view-overview">
+                <!-- Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon purple"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Всего тендеров</span>
+                            <h3 class="stat-value" id="stat-total-tenders">-</h3>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon indigo"><i class="fa-solid fa-square-check"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Совпадений найдено</span>
+                            <h3 class="stat-value" id="stat-total-matches">-</h3>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fa-solid fa-paper-plane"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Уведомлений отправлено</span>
+                            <h3 class="stat-value" id="stat-sent-notifications">-</h3>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon red"><i class="fa-solid fa-circle-exclamation"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Ошибок / Просрочено</span>
+                            <h3 class="stat-value" id="stat-errors-expired">-</h3>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity & Search Presets Overview -->
+                <div class="dashboard-details">
+                    <div class="card details-card">
+                        <div class="card-header">
+                            <h3>Последние релевантные совпадения</h3>
+                            <a href="#tenders" class="btn-link" onclick="switchTab('tenders')">Все совпадения <i class="fa-solid fa-arrow-right"></i></a>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-wrapper">
+                                <table class="recent-matches-table">
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Название тендера</th>
+                                            <th>Профиль</th>
+                                            <th>Скоринг</th>
+                                            <th>Статус</th>
+                                            <th>Дата</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="recent-matches-body">
+                                        <tr>
+                                            <td colspan="6" class="text-center text-muted">Загрузка данных...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tenders List View -->
+            <div class="content-view" id="view-tenders">
+                <div class="card filter-card">
+                    <div class="filter-bar">
+                        <div class="search-input-wrapper">
+                            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                            <input type="text" id="tender-search" placeholder="Поиск по названию или заказчику...">
+                        </div>
+                        <div class="filter-controls">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="filter-matched-only">
+                                <span class="slider"></span>
+                            </label>
+                            <span class="toggle-label">Только релевантные</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card table-card">
+                    <div class="table-wrapper">
+                        <table class="tenders-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Название</th>
+                                    <th>Заказчик</th>
+                                    <th>Дедлайн</th>
+                                    <th>Стоимость</th>
+                                    <th>Статус</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tenders-table-body">
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted">Загрузка списка тендеров...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination-footer">
+                        <button class="btn btn-secondary" id="btn-prev-page" disabled><i class="fa-solid fa-chevron-left"></i> Назад</button>
+                        <span id="page-indicator">Страница 1</span>
+                        <button class="btn btn-secondary" id="btn-next-page">Вперед <i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Profiles Settings View -->
+            <div class="content-view" id="view-profiles">
+                <div class="profiles-header-actions">
+                    <button class="btn btn-primary" id="btn-create-profile"><i class="fa-solid fa-plus"></i> Создать новый профиль</button>
+                </div>
+                <div class="profiles-grid" id="profiles-list-container">
+                    <!-- Dynamic Profile Cards go here -->
+                </div>
+            </div>
+
+            <!-- Actions Panel View -->
+            <div class="content-view" id="view-actions">
+                <div class="actions-grid">
+                    <div class="card action-card">
+                        <div class="action-header">
+                            <div class="action-icon purple"><i class="fa-solid fa-cloud-arrow-down"></i></div>
+                            <div class="action-title-group">
+                                <h3>Импорт и скоринг тендеров</h3>
+                                <p class="text-muted">Запуск парсинга новых тендеров с goszakupki.by и их автоматическая фильтрация.</p>
+                            </div>
+                        </div>
+                        <div class="action-body">
+                            <div class="status-indicator">
+                                <span>Статус выполнения:</span>
+                                <span class="task-status-badge badge-idle" id="status-ingest">Готов</span>
+                            </div>
+                            <button class="btn btn-primary btn-block" id="btn-run-ingest">Запустить импорт</button>
+                        </div>
+                    </div>
+
+                    <div class="card action-card">
+                        <div class="action-header">
+                            <div class="action-icon green"><i class="fa-solid fa-paper-plane"></i></div>
+                            <div class="action-title-group">
+                                <h3>Рассылка уведомлений</h3>
+                                <p class="text-muted">Отправка найденных релевантных тендеров в настроенный Telegram-канал.</p>
+                            </div>
+                        </div>
+                        <div class="action-body">
+                            <div class="status-indicator">
+                                <span>Статус выполнения:</span>
+                                <span class="task-status-badge badge-idle" id="status-notify">Готов</span>
+                            </div>
+                            <button class="btn btn-success btn-block" id="btn-run-notify">Запустить рассылку</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Logs panel -->
+                <div class="card logs-card">
+                    <div class="card-header">
+                        <h3>Консоль действий</h3>
+                        <button class="btn-icon" id="btn-clear-console" title="Очистить консоль"><i class="fa-solid fa-trash-can"></i></button>
+                    </div>
+                    <div class="card-body">
+                        <div class="console-box" id="system-console">
+                            <div class="console-line system">[System] Консоль запущена. Ожидание команд...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for editing Search Profile -->
+    <div class="modal-backdrop" id="profile-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modal-profile-title">Редактировать профиль поиска</h3>
+                <button class="btn-close" id="modal-profile-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="profile-form">
+                    <input type="hidden" id="form-profile-id">
+                    <div class="form-group">
+                        <label for="form-profile-name">Название профиля <span class="required">*</span></label>
+                        <input type="text" id="form-profile-name" required placeholder="Например: HVAC / Кондиционеры">
+                    </div>
+                    <div class="form-group">
+                        <label for="form-profile-description">Описание</label>
+                        <textarea id="form-profile-description" rows="2" placeholder="Краткое описание профиля..."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Ключевые слова (Keywords)</label>
+                        <div class="tags-input-container">
+                            <div class="tags-list" id="keywords-tags-list"></div>
+                            <input type="text" id="input-keyword-tag" placeholder="Нажмите Enter для добавления...">
+                        </div>
+                        <p class="form-help">Тендер подходит, если в его названии или описании есть хотя бы одно из этих слов.</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Исключающие слова (Negative Keywords)</label>
+                        <div class="tags-input-container">
+                            <div class="tags-list" id="negative-tags-list"></div>
+                            <input type="text" id="input-negative-tag" placeholder="Нажмите Enter для добавления...">
+                        </div>
+                        <p class="form-help">Тендер пропускается, если в нем содержится хотя бы одно из этих исключающих слов.</p>
+                    </div>
+
+                    <div class="form-group-row">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="form-profile-active" checked>
+                            <span class="checkmark"></span>
+                            Активный профиль
+                        </label>
+                    </div>
+
+                    <hr class="modal-divider">
+
+                    <!-- Notification Channel Details -->
+                    <h4 class="section-title"><i class="fa-brands fa-telegram text-telegram"></i> Настройка Telegram Уведомлений</h4>
+                    <div class="form-group">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="form-channel-active" checked>
+                            <span class="checkmark"></span>
+                            Включить отправку в Telegram
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-telegram-chat">Chat ID <span class="required" id="chat-req">*</span></label>
+                        <input type="text" id="form-telegram-chat" placeholder="Например: -100123456789">
+                        <p class="form-help">ID группы, канала или чата, куда бот будет отправлять уведомления.</p>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-cancel-profile">Отмена</button>
+                <button class="btn btn-primary" id="btn-save-profile">Сохранить изменения</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for viewing Tender JSON / Details -->
+    <div class="modal-backdrop" id="tender-modal">
+        <div class="modal-card modal-lg">
+            <div class="modal-header">
+                <h3 id="modal-tender-title">Детали тендера</h3>
+                <button class="btn-close" id="modal-tender-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="tender-modal-details">
+                    <div class="details-section">
+                        <div class="details-row"><strong>Заказчик:</strong> <span id="modal-tender-customer">-</span></div>
+                        <div class="details-row"><strong>Дедлайн:</strong> <span id="modal-tender-deadline">-</span></div>
+                        <div class="details-row"><strong>Стоимость:</strong> <span id="modal-tender-value">-</span></div>
+                        <div class="details-row"><strong>Оригинальная ссылка:</strong> <a href="#" id="modal-tender-link" target="_blank">Открыть первоисточник <i class="fa-solid fa-arrow-up-right-from-square"></i></a></div>
+                    </div>
+                    <hr>
+                    <h4>Сырые JSON данные (Raw Data)</h4>
+                    <pre class="json-viewer"><code id="modal-tender-json"></code></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-close-tender-view">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
