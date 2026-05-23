@@ -23,7 +23,22 @@ dependencies = [
   "loguru",
   "pypdf",
   "python-docx",
+  # Sprint 3: quality & robustness
+  "pymorphy3",     # Russian morphological analysis for keyword scoring
+  "tenacity",      # Retry with exponential backoff for DeepSeek API calls
+  "openpyxl",      # .xlsx attachment extraction
 ]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["apps/worker/src"]
+addopts = "-v --tb=short"
 
 [project.scripts]
 belzakupki-seed = "worker.cli:seed"

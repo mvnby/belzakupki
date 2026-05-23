@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from hashlib import sha256
 import os
-import re
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import urlencode, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
+
+from worker.sources.base import extract_external_id, normalize_html_text
+from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP, map_regions
 
 BASE_URL = "https://goszakupki.by"
 URL = f"{BASE_URL}/tenders/posted"
@@ -49,23 +50,6 @@ class GoszakupkiSearch:
         return "; ".join(parts) or "posted"
 
 
-def extract_external_id(url: str) -> str:
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-
-    for key in ("id", "tender_id", "number"):
-        values = query.get(key)
-        if values:
-            return values[0]
-
-    path_key = parsed.path.rstrip("/").split("/")[-1]
-
-    if path_key:
-        return path_key[:128]
-
-    return sha256(url.encode("utf-8")).hexdigest()
-
-
 def should_verify_ssl() -> bool:
     value = os.getenv("GOSZAKUPKI_VERIFY_SSL", "true").casefold()
 
@@ -92,16 +76,7 @@ def build_search_params(search: GoszakupkiSearch | None) -> list[tuple[str, str]
         params.append(("TendersSearch[text]", search.text))
 
     for region in search.regions:
-        # Map canonical region code to goszakupki code
-        # Canonical: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk City, '6'=Minsk Region, '7'=Mogilev
-        # Goszakupki: '1'=Brest, '2'=Vitebsk, '3'=Gomel, '4'=Grodno, '5'=Minsk Region, '6'=Mogilev, '7'=Minsk City
-        mapped_region = region
-        if region == '5':
-            mapped_region = '7'
-        elif region == '6':
-            mapped_region = '5'
-        elif region == '7':
-            mapped_region = '6'
+        mapped_region = GOSZAKUPKI_REGION_MAP.get(region, region)
         params.append(("TendersSearch[region][]", mapped_region))
 
     if search.industry:
@@ -120,10 +95,6 @@ def build_search_url(search: GoszakupkiSearch | None) -> str:
         return URL
 
     return f"{URL}?{urlencode(params)}"
-
-
-def normalize_html_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
 
 
 def parse_tenders_html(

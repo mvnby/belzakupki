@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender
+from belzakupki_db.enums import MatchStatus, NotificationStatus
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
@@ -100,7 +101,7 @@ def dispatch_notifications(session: Session) -> int:
             joinedload(TenderMatch.tender).joinedload(Tender.source),
             joinedload(TenderMatch.profile),
         )
-        .where(TenderMatch.status == "new")
+        .where(TenderMatch.status == MatchStatus.NEW)
         .order_by(TenderMatch.created_at.asc())
     )
     matches = list(session.execute(stmt).scalars())
@@ -119,7 +120,7 @@ def dispatch_notifications(session: Session) -> int:
                 f"Tender match {match.id} (tender_id={match.tender.id}) was rejected by AI. "
                 "Marking as 'rejected_by_ai' and skipping notification."
             )
-            match.status = "rejected_by_ai"
+            match.status = MatchStatus.REJECTED_BY_AI
             continue
 
         # Проверяем, не истек ли дедлайн подачи заявок
@@ -136,7 +137,7 @@ def dispatch_notifications(session: Session) -> int:
                 f"Tender match {match.id} (tender_id={match.tender.id}) has expired deadline "
                 f"({deadline_at}). Marking as expired and skipping notification."
             )
-            match.status = "expired"
+            match.status = MatchStatus.EXPIRED
             continue
         # Находим активные каналы уведомлений для профиля этого совпадения
         channels_stmt = (
@@ -153,14 +154,14 @@ def dispatch_notifications(session: Session) -> int:
                 f"No active notification channels found for profile: {match.profile.name} (id={match.profile_id}). "
                 f"Skipping match (id={match.id})."
             )
-            match.status = "processed"
+            match.status = MatchStatus.PROCESSED
             continue
             
         for channel in channels:
             log = NotificationLog(
                 match_id=match.id,
                 channel_id=channel.id,
-                status="pending",
+                status=NotificationStatus.PENDING,
                 created_at=datetime.now(timezone.utc),
             )
             session.add(log)
@@ -170,7 +171,7 @@ def dispatch_notifications(session: Session) -> int:
                 if not bot_token or bot_token == "your-bot-token":
                     error_msg = "TELEGRAM_BOT_TOKEN is not configured or set to default value."
                     logger.error(error_msg)
-                    log.status = "error"
+                    log.status = NotificationStatus.ERROR
                     log.error_message = error_msg
                     continue
                     
@@ -178,7 +179,7 @@ def dispatch_notifications(session: Session) -> int:
                 if not chat_id or chat_id == "your-chat-id":
                     error_msg = "chat_id is not configured in NotificationChannel config."
                     logger.error(error_msg)
-                    log.status = "error"
+                    log.status = NotificationStatus.ERROR
                     log.error_message = error_msg
                     continue
                     
@@ -194,23 +195,23 @@ def dispatch_notifications(session: Session) -> int:
                         ]
                     }
                     send_telegram_message(bot_token, str(chat_id), text, reply_markup)
-                    log.status = "sent"
+                    log.status = NotificationStatus.SENT
                     log.sent_at = datetime.now(timezone.utc)
                     logger.info(f"Notification log (id={log.id}) sent successfully.")
                 except Exception as e:
                     error_msg = str(e)
                     logger.exception(f"Error sending Telegram notification for log {log.id}")
-                    log.status = "error"
+                    log.status = NotificationStatus.ERROR
                     log.error_message = error_msg
                 
                 time.sleep(3.0)  # prevent hitting Telegram rate limits (429)
             else:
                 error_msg = f"Unsupported notification channel type: {channel.type}"
                 logger.error(error_msg)
-                log.status = "error"
+                log.status = NotificationStatus.ERROR
                 log.error_message = error_msg
-                
-        match.status = "processed"
+
+        match.status = MatchStatus.PROCESSED
         dispatched_count += 1
         
     session.commit()

@@ -181,7 +181,7 @@ async function loadOverviewData() {
 
     // Load recent matches (limit 5)
     try {
-        const matchesRes = await fetch('/matches?limit=5');
+        const matchesRes = await fetch('/api/matches?limit=5');
         const matchesData = await matchesRes.json();
         
         const tbody = document.getElementById('recent-matches-body');
@@ -236,7 +236,7 @@ async function loadTendersData() {
     tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Загрузка списка тендеров...</td></tr>';
 
     const offset = (state.tendersPage - 1) * state.tendersPageSize;
-    let url = `/tenders?limit=${state.tendersPageSize}&offset=${offset}&matched_only=${state.tendersFilterMatched}`;
+    let url = `/api/tenders?limit=${state.tendersPageSize}&offset=${offset}&matched_only=${state.tendersFilterMatched}`;
     if (state.tendersSearch.trim()) {
         url += `&q=${encodeURIComponent(state.tendersSearch)}`;
     }
@@ -488,7 +488,7 @@ async function runNotify() {
 // --- Tender Details View (Modal) ---
 async function viewTenderDetails(tenderId) {
     try {
-        const res = await fetch(`/tenders/${tenderId}`);
+        const res = await fetch(`/api/tenders/${tenderId}`);
         if (!res.ok) throw new Error('Не удалось получить информацию о тендере');
         const tender = await res.json();
 

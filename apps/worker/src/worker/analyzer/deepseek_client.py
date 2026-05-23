@@ -6,6 +6,21 @@ from typing import Any
 import httpx
 from loguru import logger
 
+try:
+    from tenacity import (
+        retry,
+        retry_if_exception_type,
+        stop_after_attempt,
+        wait_exponential,
+    )
+    _TENACITY_AVAILABLE = True
+except ImportError:
+    _TENACITY_AVAILABLE = False
+    logger.warning(
+        "tenacity is not installed — DeepSeek API calls will NOT be retried on failure. "
+        "Run `pip install tenacity` to enable automatic retries."
+    )
+
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 METADATA_SYSTEM_PROMPT = """Ты — эксперт по анализу государственных закупок. Твоя задача — провести первичную экспресс-оценку релевантности тендера по его метаданным (название, заказчик, описание).
@@ -49,6 +64,22 @@ You MUST return a JSON object (JSON Mode is enabled) with the following structur
 }
 """
 
+def _do_deepseek_post(url: str, payload: dict, headers: dict, timeout: int) -> dict:
+    """Raw HTTP call to DeepSeek — separated so tenacity can wrap it."""
+    response = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+if _TENACITY_AVAILABLE:
+    _do_deepseek_post = retry(
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        reraise=True,
+    )(_do_deepseek_post)
+
+
 def analyze_relevance_by_metadata(
     title: str,
     customer: str,
@@ -80,15 +111,9 @@ def analyze_relevance_by_metadata(
 
     try:
         logger.info(f"Sending metadata of tender '{title}' to DeepSeek API for Stage 1 check...")
-        response = httpx.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-
-        result = response.json()
+        result = _do_deepseek_post(DEEPSEEK_API_URL, payload, headers, timeout=30)
         content = result["choices"][0]["message"]["content"]
-        
-        # Parse the JSON string from DeepSeek response
         analysis = json.loads(content)
-        
         logger.info(f"DeepSeek metadata analysis complete. Relevant: {analysis.get('relevant')}")
         return analysis
 
@@ -132,15 +157,9 @@ def analyze_tender_relevance(
 
     try:
         logger.info(f"Sending tender '{title}' to DeepSeek API...")
-        response = httpx.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=45)
-        response.raise_for_status()
-
-        result = response.json()
+        result = _do_deepseek_post(DEEPSEEK_API_URL, payload, headers, timeout=45)
         content = result["choices"][0]["message"]["content"]
-        
-        # Parse the JSON string from DeepSeek response
         analysis = json.loads(content)
-        
         logger.info(f"DeepSeek analysis complete. Relevant: {analysis.get('relevant')}")
         return analysis
 

@@ -1,8 +1,16 @@
+"""Keyword scoring for tender texts.
+
+Uses morphological normalisation (pymorphy3 if available, plain casefold
+otherwise) so that keywords like "кондиционер" match inflected forms such
+as "кондиционеров", "кондиционировании", "кондиционирование".
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
 import re
+
+from worker.morphology import normalise_for_matching
 
 
 @dataclass(frozen=True)
@@ -12,21 +20,14 @@ class ScoreResult:
     reason: str | None = None
 
 
-def normalize_text(value: str | None) -> str:
-    if not value:
-        return ""
-
-    return re.sub(r"\s+", " ", value.casefold()).strip()
-
-
 def find_keywords(text: str, keywords: list[str]) -> list[str]:
-    normalized_text = normalize_text(text)
+    """Return keywords (original form) found in *text* after normalisation."""
+    normalised_text = normalise_for_matching(text)
     matched: list[str] = []
 
     for keyword in keywords:
-        normalized_keyword = normalize_text(keyword)
-
-        if normalized_keyword and normalized_keyword in normalized_text:
+        normalised_keyword = normalise_for_matching(keyword)
+        if normalised_keyword and normalised_keyword in normalised_text:
             matched.append(keyword)
 
     return sorted(set(matched), key=matched.index)
