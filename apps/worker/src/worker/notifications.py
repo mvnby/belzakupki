@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender
 
 
-def send_telegram_message(bot_token: str, chat_id: str, text: str) -> None:
+def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -22,6 +22,8 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> None:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     
     logger.info(f"Sending Telegram notification to chat_id={chat_id}")
     
@@ -182,7 +184,16 @@ def dispatch_notifications(session: Session) -> int:
                     
                 try:
                     text = format_tender_message(match)
-                    send_telegram_message(bot_token, str(chat_id), text)
+                    reply_markup = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "🔎 Подробнее", "callback_data": f"detail:{match.id}"},
+                                {"text": "✅ Принять", "callback_data": f"accept:{match.id}"},
+                                {"text": "❌ Отклонить", "callback_data": f"reject:{match.id}"}
+                            ]
+                        ]
+                    }
+                    send_telegram_message(bot_token, str(chat_id), text, reply_markup)
                     log.status = "sent"
                     log.sent_at = datetime.now(timezone.utc)
                     logger.info(f"Notification log (id={log.id}) sent successfully.")

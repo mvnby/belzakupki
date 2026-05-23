@@ -208,6 +208,8 @@ async function loadOverviewData() {
             if (match.status === 'new') statusText = 'новый';
             else if (match.status === 'processed') statusText = 'отправлен';
             else if (match.status === 'rejected_by_ai') statusText = 'отклонён ИИ';
+            else if (match.status === 'accepted') statusText = 'принят';
+            else if (match.status === 'rejected') statusText = 'отклонён';
 
             tr.innerHTML = `
                 <td>#${match.id}</td>
