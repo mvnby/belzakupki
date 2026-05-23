@@ -304,3 +304,38 @@ def fetch_dynamic_tenders(
         limit=limit,
         verify_ssl=verify_ssl,
     )
+
+
+def fetch_tender_attachments(
+    tender_url: str,
+    *,
+    verify_ssl: bool | None = None,
+) -> list[dict[str, str]]:
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    headers = build_headers()
+    
+    with httpx.Client(
+        follow_redirects=True,
+        headers=headers,
+        timeout=15,
+        verify=verify,
+    ) as client:
+        response = client.get(tender_url)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, "html.parser")
+        attachments = []
+        
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "/getFile/" in href:
+                file_url = urljoin(tender_url, href)
+                if "/getFile/" in file_url:
+                    file_url = file_url.replace("/getFile/", "/download/")
+                file_name = normalize_html_text(link.get_text("", strip=False)) or href.split("/")[-1]
+                attachments.append({
+                    "name": file_name,
+                    "url": file_url,
+                })
+        return attachments
+

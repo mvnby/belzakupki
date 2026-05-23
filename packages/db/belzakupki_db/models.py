@@ -154,6 +154,9 @@ class TenderMatch(Base, TimestampMixin, ReprMixin):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="new")
 
+    ai_relevance: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ai_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     tender: Mapped[Tender] = relationship(back_populates="matches")
     profile: Mapped[SearchProfile] = relationship(back_populates="matches")
     notification_logs: Mapped[list["NotificationLog"]] = relationship(

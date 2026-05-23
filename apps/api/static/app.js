@@ -196,13 +196,29 @@ async function loadOverviewData() {
             const tr = document.createElement('tr');
             const sourceName = match.tender.source_name || match.tender.source || '-';
             const sourceCode = match.tender.source || 'unknown';
+            
+            const isAiAnalyzed = match.ai_relevance !== null && match.ai_relevance !== undefined;
+            const aiBadge = isAiAnalyzed 
+                ? (match.ai_relevance 
+                    ? ' <span class="badge badge-ai-relevant" style="font-size:10px; padding:2px 6px; margin-left:5px; vertical-align:middle;">🤖 OK</span>' 
+                    : ' <span class="badge badge-ai-irrelevant" style="font-size:10px; padding:2px 6px; margin-left:5px; vertical-align:middle;">🤖 Отклонён</span>')
+                : '';
+
+            let statusText = 'просрочен';
+            if (match.status === 'new') statusText = 'новый';
+            else if (match.status === 'processed') statusText = 'отправлен';
+            else if (match.status === 'rejected_by_ai') statusText = 'отклонён ИИ';
+
             tr.innerHTML = `
                 <td>#${match.id}</td>
-                <td><a href="#" class="btn-link text-left" onclick="viewTenderDetails(${match.tender.id}); return false;">${match.tender.title}</a></td>
+                <td>
+                    <a href="#" class="btn-link text-left" onclick="viewTenderDetails(${match.tender.id}); return false;">${match.tender.title}</a>
+                    ${aiBadge}
+                </td>
                 <td><span class="source-tag source-${sourceCode}">${sourceName}</span></td>
                 <td>${match.profile.name}</td>
                 <td><strong>${match.score}</strong></td>
-                <td><span class="badge badge-${match.status}">${match.status === 'new' ? 'новый' : match.status === 'processed' ? 'отправлен' : 'просрочен'}</span></td>
+                <td><span class="badge badge-${match.status}">${statusText}</span></td>
                 <td>${formatDate(match.created_at)}</td>
             `;
             tbody.appendChild(tr);
@@ -249,9 +265,21 @@ async function loadTendersData() {
             const sourceName = tender.source_name || tender.source || '-';
             const sourceCode = tender.source || 'unknown';
 
+            const isAiAnalyzed = tender.ai_relevance !== null && tender.ai_relevance !== undefined;
+            const aiBadge = isAiAnalyzed 
+                ? (tender.ai_relevance 
+                    ? ' <span class="badge badge-ai-relevant" style="font-size:10px; padding:2px 6px; margin-left:5px; vertical-align:middle;">🤖 OK</span>' 
+                    : ' <span class="badge badge-ai-irrelevant" style="font-size:10px; padding:2px 6px; margin-left:5px; vertical-align:middle;">🤖 Отклонён</span>')
+                : '';
+
             tr.innerHTML = `
                 <td>#${tender.id}</td>
-                <td><div class="tender-title-column">${tender.title}</div></td>
+                <td>
+                    <div class="tender-title-column">
+                        <a href="#" class="btn-link text-left" onclick="viewTenderDetails(${tender.id}); return false;">${tender.title}</a>
+                        ${aiBadge}
+                    </div>
+                </td>
                 <td><div class="tender-customer-column">${tender.customer_name || '-'}</div></td>
                 <td><span class="source-tag source-${sourceCode}">${sourceName}</span></td>
                 <td>${formatDate(tender.deadline_at)}</td>
@@ -437,6 +465,70 @@ async function viewTenderDetails(tenderId) {
         
         const link = document.getElementById('modal-tender-link');
         link.href = tender.url;
+
+        // Render AI analysis if available
+        const aiContainer = document.getElementById('modal-ai-analysis-container');
+        const aiBadge = document.getElementById('modal-ai-relevance-badge');
+        
+        if (tender.ai_relevance !== null && tender.ai_relevance !== undefined) {
+            aiContainer.style.display = 'block';
+            
+            if (tender.ai_relevance) {
+                aiBadge.textContent = 'Релевантен';
+                aiBadge.className = 'badge badge-ai-relevant';
+            } else {
+                aiBadge.textContent = 'Не релевантен';
+                aiBadge.className = 'badge badge-ai-irrelevant';
+            }
+            
+            const analysis = tender.ai_analysis || {};
+            document.getElementById('modal-ai-explanation').textContent = analysis.explanation || 'Нет пояснения от ИИ';
+            
+            const info = analysis.commercial_proposal_info || {};
+            document.getElementById('modal-ai-scope').textContent = info.scope || 'Не указан';
+            document.getElementById('modal-ai-requirements').textContent = info.requirements || 'Не указаны';
+            document.getElementById('modal-ai-budget').textContent = info.budget_notes || 'Не указан';
+            document.getElementById('modal-ai-actions').textContent = info.suggested_actions || 'Не указаны';
+        } else {
+            aiContainer.style.display = 'none';
+        }
+
+        // Render attachments if available
+        const attContainer = document.getElementById('modal-attachments-container');
+        const attList = document.getElementById('modal-attachments-list');
+        attList.innerHTML = '';
+        
+        if (tender.attachments && tender.attachments.length > 0) {
+            attContainer.style.display = 'block';
+            tender.attachments.forEach(att => {
+                const a = document.createElement('a');
+                a.href = att.url;
+                a.target = '_blank';
+                a.className = 'btn-link';
+                a.style.display = 'inline-flex';
+                a.style.alignItems = 'center';
+                a.style.gap = '8px';
+                a.style.padding = '8px 12px';
+                a.style.background = 'rgba(255, 255, 255, 0.05)';
+                a.style.border = '1px solid rgba(255, 255, 255, 0.1)';
+                a.style.borderRadius = '6px';
+                a.style.color = 'var(--text-primary)';
+                a.style.textDecoration = 'none';
+                a.style.width = 'fit-content';
+                a.style.transition = 'background 0.2s';
+                a.onmouseenter = () => a.style.background = 'rgba(255, 255, 255, 0.1)';
+                a.onmouseleave = () => a.style.background = 'rgba(255, 255, 255, 0.05)';
+                
+                let iconClass = 'fa-file-lines';
+                if (att.name.toLowerCase().endsWith('.pdf')) iconClass = 'fa-file-pdf';
+                else if (att.name.toLowerCase().endsWith('.docx') || att.name.toLowerCase().endsWith('.doc')) iconClass = 'fa-file-word';
+                
+                a.innerHTML = `<i class="fa-solid ${iconClass}"></i> <span>${att.name}</span>`;
+                attList.appendChild(a);
+            });
+        } else {
+            attContainer.style.display = 'none';
+        }
 
         // Render formatted JSON
         document.getElementById('modal-tender-json').textContent = JSON.stringify(tender, null, 2);

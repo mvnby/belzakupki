@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+import httpx
+from loguru import logger
+
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+
+SYSTEM_PROMPT = """You are an expert assistant analyzing public procurement tenders.
+Your task is to determine whether the provided tender documents match a search profile for HVAC (Heating, Ventilation, and Air Conditioning / кондиционирование, вентиляция, отопление).
+Specifically, we look for:
+- Supply, installation, maintenance, or repair of air conditioners, split systems, multi-split systems, VRF/VRV systems.
+- Design, installation, or maintenance of ventilation systems.
+- Do NOT classify general building renovation/repairs as relevant unless air conditioning/ventilation is a prominent, specific component of the work.
+- Exclude automotive or agricultural vehicle AC systems unless specifically requested (we exclude car/tractor AC by default).
+
+You MUST return a JSON object (JSON Mode is enabled) with the following structure:
+{
+  "relevant": true/false,
+  "explanation": "Краткое объяснение на русском языке, почему тендер подходит или нет",
+  "commercial_proposal_info": {
+    "scope": "Краткое описание объема работ/поставки, количество кондиционеров, марки, технические требования (на русском)",
+    "requirements": "Требования к участникам (опыт, СРО, лицензии, сертификаты) (на русском)",
+    "budget_notes": "Сведения о бюджете, авансе, условиях оплаты и ценообразования из документов (на русском)",
+    "suggested_actions": "Рекомендуемые действия для подготовки коммерческого предложения (на русском)"
+  }
+}
+"""
+
+def analyze_tender_relevance(
+    title: str,
+    customer: str,
+    documents_text: str,
+    api_key: str | None = None,
+) -> dict[str, Any] | None:
+    token = api_key or os.getenv("DEEPSEEK_TOKEN")
+    if not token or token == "your-deepseek-token":
+        logger.warning("DEEPSEEK_TOKEN is not configured. Skipping AI analysis.")
+        return None
+
+    # Truncate document text to prevent exceeding context window (e.g. max 30,000 characters)
+    max_chars = 30000
+    if len(documents_text) > max_chars:
+        logger.info(f"Tender text length ({len(documents_text)}) exceeds limit. Truncating to {max_chars} chars.")
+        documents_text = documents_text[:max_chars] + "\n[Text truncated due to length limits]"
+
+    user_content = f"Tender Title: {title}\nCustomer: {customer}\n\nDocument Text:\n{documents_text}"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        logger.info(f"Sending tender '{title}' to DeepSeek API...")
+        response = httpx.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=45)
+        response.raise_for_status()
+
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+        
+        # Parse the JSON string from DeepSeek response
+        analysis = json.loads(content)
+        
+        logger.info(f"DeepSeek analysis complete. Relevant: {analysis.get('relevant')}")
+        return analysis
+
+    except Exception as e:
+        logger.error(f"DeepSeek API call failed: {e}")
+        return None

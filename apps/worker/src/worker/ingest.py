@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import os
 from typing import Any
+import httpx
+from loguru import logger
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
@@ -213,6 +216,8 @@ def ingest_goszakupki_tenders(
 
         matches += score_tender(session, tender)
 
+    run_ai_analysis_for_new_matches(session, SOURCE_CODE)
+
     if commit:
         session.commit()
 
@@ -269,6 +274,8 @@ def ingest_icetrade_tenders(
 
         matches += score_tender(session, tender)
 
+    run_ai_analysis_for_new_matches(session, "icetrade_by")
+
     if commit:
         session.commit()
 
@@ -278,3 +285,132 @@ def ingest_icetrade_tenders(
         updated=updated,
         matches=matches,
     )
+
+
+def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
+    token = os.getenv("DEEPSEEK_TOKEN")
+    if not token or token == "your-deepseek-token":
+        logger.info("DEEPSEEK_TOKEN not configured. Skipping AI analysis.")
+        return
+
+    # Find matches that are 'new' and don't have AI relevance set yet
+    stmt = (
+        select(TenderMatch)
+        .join(TenderMatch.tender)
+        .join(Tender.source)
+        .where(
+            TenderSource.code == source_code,
+            TenderMatch.status == "new",
+            TenderMatch.ai_relevance.is_(None),
+        )
+    )
+    matches = list(session.execute(stmt).scalars())
+    if not matches:
+        return
+
+    logger.info(f"Running AI analysis for {len(matches)} new matches from source '{source_code}'...")
+
+    temp_dir = "/app/apps/worker/temp_docs" if os.path.exists("/app") else "/Users/maksimkorotov/Documents/belzakupki/apps/worker/temp_docs"
+    os.makedirs(temp_dir, exist_ok=True)
+
+    from worker.analyzer.text_extractor import extract_text_from_file
+    from worker.analyzer.deepseek_client import analyze_tender_relevance
+
+    if source_code == "goszakupki_by":
+        from worker.sources.goszakupki_by import fetch_tender_attachments
+    elif source_code == "icetrade_by":
+        from worker.sources.icetrade_by import fetch_tender_attachments
+    else:
+        logger.error(f"Unknown source code: {source_code}")
+        return
+
+    for match in matches:
+        tender = match.tender
+        logger.info(f"AI Analyzing match {match.id} (Tender: {tender.title})")
+
+        try:
+            # 1. Fetch attachments
+            attachments = fetch_tender_attachments(tender.url)
+            logger.info(f"Found {len(attachments)} attachments for tender {tender.id}")
+
+            raw_data = dict(tender.raw_data or {})
+            raw_data["attachments"] = attachments
+            tender.raw_data = raw_data
+            session.add(tender)
+
+
+            text_content = ""
+            if not attachments:
+                logger.info(f"No attachments found for tender {tender.id}. Analyzing description/title.")
+                text_content = tender.description or tender.title
+            else:
+                text_parts = []
+                for idx, att in enumerate(attachments):
+                    file_name = att["name"]
+                    file_url = att["url"]
+
+                    clean_name = "".join(c for c in file_name if c.isalnum() or c in (".", "_", "-")).strip()
+                    if not clean_name:
+                        clean_name = f"doc_{idx}"
+
+                    local_path = os.path.join(temp_dir, f"{tender.id}_{idx}_{clean_name}")
+
+                    # Download
+                    try:
+                        if source_code == "goszakupki_by":
+                            from worker.sources.goszakupki_by import build_headers, should_verify_ssl
+                            verify = should_verify_ssl()
+                            headers = build_headers()
+                        else:
+                            from worker.sources.icetrade_by import build_headers, should_verify_ssl
+                            verify = should_verify_ssl()
+                            headers = build_headers()
+
+                        with httpx.Client(follow_redirects=True, headers=headers, verify=verify, timeout=20) as client:
+                            if source_code == "goszakupki_by":
+                                client.get("https://goszakupki.by")
+                            response = client.get(file_url)
+                            response.raise_for_status()
+                            with open(local_path, "wb") as f:
+                                f.write(response.content)
+
+                        file_text = extract_text_from_file(local_path)
+                        if file_text:
+                            text_parts.append(f"--- File: {file_name} ---\n{file_text}")
+                    except Exception as e:
+                        logger.warning(f"Failed to download/extract file {file_name}: {e}")
+                    finally:
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+
+                text_content = "\n\n".join(text_parts)
+
+            # Analyze
+            analysis = analyze_tender_relevance(
+                title=tender.title,
+                customer=tender.customer_name or "Не указан",
+                documents_text=text_content or tender.title,
+            )
+
+            if analysis is not None:
+                match.ai_relevance = analysis.get("relevant", False)
+                match.ai_analysis = analysis
+                if not match.ai_relevance:
+                    logger.info(f"Tender {tender.id} rejected by AI. Setting status to 'rejected_by_ai'.")
+                    match.status = "rejected_by_ai"
+                else:
+                    logger.info(f"Tender {tender.id} approved by AI. Keeping status 'new'.")
+            else:
+                logger.warning(f"DeepSeek analysis returned None for match {match.id}")
+
+            session.add(match)
+            session.flush()
+
+        except Exception as e:
+            logger.error(f"Error during AI analysis of match {match.id}: {e}")
+
+    try:
+        if os.path.exists(temp_dir):
+            os.rmdir(temp_dir)
+    except Exception:
+        pass

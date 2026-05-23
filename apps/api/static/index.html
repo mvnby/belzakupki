@@ -379,6 +379,31 @@
                         <div class="details-row"><strong>Стоимость:</strong> <span id="modal-tender-value">-</span></div>
                         <div class="details-row"><strong>Оригинальная ссылка:</strong> <a href="#" id="modal-tender-link" target="_blank">Открыть первоисточник <i class="fa-solid fa-arrow-up-right-from-square"></i></a></div>
                     </div>
+                    
+                    <!-- ИИ-анализ DeepSeek -->
+                    <div id="modal-ai-analysis-container" style="display:none; margin-top:20px;">
+                        <hr>
+                        <h4 style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                            <span style="font-size:20px;">🤖</span> 
+                            Анализ релевантности ИИ (DeepSeek)
+                            <span id="modal-ai-relevance-badge" class="badge">-</span>
+                        </h4>
+                        <p id="modal-ai-explanation" style="font-style:italic; color:var(--text-secondary); margin-bottom:15px; line-height:1.4;"></p>
+                        
+                        <div id="modal-ai-proposal-details" class="details-section" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:15px; border-radius:8px;">
+                            <div style="margin-bottom:12px;"><strong>📋 Объем работ:</strong> <p id="modal-ai-scope" style="margin:5px 0 0 0; color:var(--text-primary); line-height:1.4;"></p></div>
+                            <div style="margin-bottom:12px;"><strong>🛡️ Требования к участникам:</strong> <p id="modal-ai-requirements" style="margin:5px 0 0 0; color:var(--text-primary); line-height:1.4;"></p></div>
+                            <div style="margin-bottom:12px;"><strong>💵 Бюджет и оплата:</strong> <p id="modal-ai-budget" style="margin:5px 0 0 0; color:var(--text-primary); line-height:1.4;"></p></div>
+                            <div><strong>🚀 Рекомендуемые действия:</strong> <p id="modal-ai-actions" style="margin:5px 0 0 0; color:var(--text-primary); line-height:1.4;"></p></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Прикрепленные документы -->
+                    <div id="modal-attachments-container" style="display:none; margin-top:20px;">
+                        <hr>
+                        <h4 style="margin-bottom:10px;">📁 Прикрепленные документы</h4>
+                        <div id="modal-attachments-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                    </div>
                     <hr>
                     <h4>Сырые JSON данные (Raw Data)</h4>
                     <pre class="json-viewer"><code id="modal-tender-json"></code></pre>
