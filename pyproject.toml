@@ -27,6 +27,12 @@ dependencies = [
   "pymorphy3",     # Russian morphological analysis for keyword scoring
   "tenacity",      # Retry with exponential backoff for DeepSeek API calls
   "openpyxl",      # .xlsx attachment extraction
+  # Sprint 5: Reliability & OCR
+  "xlrd",          # .xls attachment extraction
+  "pytesseract",   # Tesseract OCR wrapper
+  "pymupdf",       # PDF parsing & rendering for OCR (fitz)
+  "py7zr",         # .7z archive extraction
+  "rarfile",       # .rar archive extraction
 ]
 
 [project.optional-dependencies]
