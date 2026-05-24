@@ -195,3 +195,12 @@ def ingest_icetrade() -> None:
             count = dispatch_notifications(session)
             print(f"Sent messages for {count} matches.")
 
+
+def check_results() -> None:
+    from worker.ingest import check_results_for_active_tenders
+    print("Checking results for active expired tenders...")
+    with SessionLocal() as session:
+        check_results_for_active_tenders(session)
+    print("Results check complete.")
+
+

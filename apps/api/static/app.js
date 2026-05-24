@@ -631,6 +631,57 @@ async function viewTenderDetails(tenderId) {
             lotsContainer.style.display = 'none';
         }
 
+        // Render result / winners if available
+        const resultContainer = document.getElementById('modal-tender-result-container');
+        if (tender.result) {
+            resultContainer.style.display = 'block';
+            document.getElementById('modal-result-status').textContent = tender.result.status || 'Завершена';
+            document.getElementById('modal-result-winner').textContent = tender.result.winner_name || 'Не определен';
+            document.getElementById('modal-result-unp').textContent = tender.result.winner_unp || 'Не указан';
+            
+            let formattedPrice = '-';
+            if (tender.result.contract_price !== null && tender.result.contract_price !== undefined) {
+                formattedPrice = `${tender.result.contract_price.toLocaleString()} ${tender.result.currency || 'BYN'}`;
+            }
+            document.getElementById('modal-result-price').textContent = formattedPrice;
+
+            const protocolRow = document.getElementById('modal-result-protocol-row');
+            const protocolLink = document.getElementById('modal-result-protocol-link');
+            const pUrl = tender.result.result_url || tender.result.protocol_url;
+            if (pUrl) {
+                protocolRow.style.display = 'block';
+                protocolLink.href = pUrl;
+            } else {
+                protocolRow.style.display = 'none';
+            }
+
+            const participantsBody = document.getElementById('modal-result-participants-body');
+            participantsBody.innerHTML = '';
+            
+            const participants = tender.result.participants || [];
+            if (participants.length > 0) {
+                participants.forEach(p => {
+                    const tr = document.createElement('tr');
+                    const isWinner = p.winner ? 'style="font-weight: bold; background: rgba(255, 215, 0, 0.05);"' : '';
+                    const winnerBadge = p.winner ? '<span class="badge badge-ai-relevant" style="font-size:10px; padding:2px 6px;">Победитель</span>' : (p.place ? `Место ${p.place}` : 'Участник');
+                    
+                    tr.innerHTML = `
+                        <td ${isWinner}>${escapeHtml(p.name)}</td>
+                        <td ${isWinner}>${escapeHtml(p.unp) || '-'}</td>
+                        <td ${isWinner}>${escapeHtml(p.price) || '-'}</td>
+                        <td ${isWinner}>${winnerBadge}</td>
+                    `;
+                    participantsBody.appendChild(tr);
+                });
+            } else {
+                const tr = document.createElement('tr');
+                tr.innerHTML = '<td colspan="4" style="text-align: center; color: var(--text-secondary);">Нет данных об участниках</td>';
+                participantsBody.appendChild(tr);
+            }
+        } else {
+            resultContainer.style.display = 'none';
+        }
+
         // Render formatted JSON
         document.getElementById('modal-tender-json').textContent = JSON.stringify(tender, null, 2);
 

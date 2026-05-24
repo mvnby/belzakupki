@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSource
+from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSource, TenderResult
 from belzakupki_db.enums import MatchStatus
 from worker.scoring import score_text
 from worker.sources.goszakupki_by import (
@@ -547,3 +547,78 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
             shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
             pass
+
+
+def check_results_for_active_tenders(session: Session) -> None:
+    """Проверяет результаты прошедших тендеров, у которых наступил дедлайн, и обновляет их статусы."""
+    from datetime import datetime, timezone
+    import worker.sources.goszakupki_by as gk
+    import worker.sources.icetrade_by as it
+
+    now = datetime.now(timezone.utc)
+    
+    # Ищем тендеры с прошедшим дедлайном, которые не находятся в конечном статусе
+    completed_statuses = ["closed", "canceled", "manque", "завершен", "отменен", "не состоялся", "признан несостоявшимся", "отменена"]
+    
+    stmt = (
+        select(Tender)
+        .outerjoin(TenderResult)
+        .where(TenderResult.id == None)
+        .where(Tender.deadline_at < now)
+        .where(Tender.status.notin_(completed_statuses))
+    )
+    
+    active_tenders = session.scalars(stmt).all()
+    logger.info(f"Found {len(active_tenders)} active expired tenders to check for results.")
+    
+    for tender in active_tenders:
+        logger.info(f"Checking results for tender {tender.id} ({tender.url})...")
+        try:
+            result_data = None
+            if "goszakupki.by" in tender.url:
+                result_data = gk.fetch_tender_result(tender.url)
+            elif "icetrade.by" in tender.url:
+                result_data = it.fetch_tender_result(tender.url)
+                
+            if result_data:
+                tender_status = result_data.get("status", "Состоялась")
+                tender.status = tender_status
+                
+                # Convert Decimal to float for JSON compatibility in raw_result_data
+                from decimal import Decimal
+                raw_result_data = dict(result_data)
+                if isinstance(raw_result_data.get("contract_price"), Decimal):
+                    raw_result_data["contract_price"] = float(raw_result_data["contract_price"])
+                
+                # Сохраняем или обновляем результат закупки
+                res_stmt = select(TenderResult).where(TenderResult.tender_id == tender.id)
+                db_result = session.scalars(res_stmt).first()
+                
+                if not db_result:
+                    db_result = TenderResult(
+                        tender_id=tender.id,
+                        status=tender_status,
+                        winner_name=result_data.get("winner_name"),
+                        winner_unp=result_data.get("winner_unp"),
+                        contract_price=result_data.get("contract_price"),
+                        currency=result_data.get("currency"),
+                        raw_result_data=raw_result_data
+                    )
+                    session.add(db_result)
+                else:
+                    db_result.status = tender_status
+                    db_result.winner_name = result_data.get("winner_name")
+                    db_result.winner_unp = result_data.get("winner_unp")
+                    db_result.contract_price = result_data.get("contract_price")
+                    db_result.currency = result_data.get("currency")
+                    db_result.raw_result_data = raw_result_data
+                
+                session.flush()
+                logger.info(f"Successfully saved result for tender {tender.id}: status={tender_status}, winner={db_result.winner_name}, price={db_result.contract_price}")
+            else:
+                logger.info(f"No result protocol found yet for tender {tender.id} ({tender.url})")
+        except Exception as e:
+            logger.error(f"Failed to check results for tender {tender.id}: {e}")
+            
+    session.commit()
+

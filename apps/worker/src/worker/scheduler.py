@@ -28,6 +28,7 @@ from loguru import logger
 
 _POLL_INTERVAL = int(os.getenv("SCHEDULER_POLL_INTERVAL", "60"))
 _MAX_WORKERS = int(os.getenv("SCHEDULER_MAX_WORKERS", "4"))
+_last_results_check_time = 0.0
 
 # Semaphore limits concurrent per-profile threads so we can't saturate
 # resources with dozens of profiles all triggering at the same moment.
@@ -111,8 +112,26 @@ def _scheduler_loop() -> None:
         f"max_workers={_MAX_WORKERS})"
     )
 
+    global _last_results_check_time
+
     while True:
         try:
+            # Periodic results check (every 1 hour)
+            now_ts = time.time()
+            if now_ts - _last_results_check_time >= 3600:
+                _last_results_check_time = now_ts
+                
+                def run_results_check():
+                    logger.info("Scheduler: starting periodic results check in background thread")
+                    try:
+                        from worker.ingest import check_results_for_active_tenders
+                        with SessionLocal() as session:
+                            check_results_for_active_tenders(session)
+                    except Exception:
+                        logger.exception("Scheduler: error during periodic results check")
+                
+                threading.Thread(target=run_results_check, daemon=True, name="scheduler-results-check").start()
+
             with SessionLocal() as session:
                 profiles = (
                     session.query(SearchProfile)

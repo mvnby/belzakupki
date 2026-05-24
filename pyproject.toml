@@ -53,6 +53,7 @@ belzakupki-ingest-icetrade = "worker.cli:ingest_icetrade"
 belzakupki-list-tenders = "worker.cli:show_tenders"
 belzakupki-list-matches = "worker.cli:show_matches"
 belzakupki-send-notifications = "worker.cli:send_notifications"
+belzakupki-check-results = "worker.cli:check_results"
 
 
 [tool.setuptools.packages.find]

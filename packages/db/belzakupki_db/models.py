@@ -91,6 +91,11 @@ class Tender(Base, TimestampMixin, ReprMixin):
         back_populates="tender",
         cascade="all, delete-orphan",
     )
+    result: Mapped[TenderResult | None] = relationship(
+        back_populates="tender",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class SearchProfile(Base, TimestampMixin, ReprMixin):
@@ -264,3 +269,24 @@ class NotificationLog(Base, ReprMixin):
     channel: Mapped[NotificationChannel] = relationship(
         back_populates="notification_logs",
     )
+
+
+class TenderResult(Base, TimestampMixin, ReprMixin):
+    """Результаты проведения закупки (выбранные победители, цены договоров, список участников)."""
+    __tablename__ = "tender_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tender_id: Mapped[int] = mapped_column(
+        ForeignKey("tenders.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    winner_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    winner_unp: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    contract_price: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    raw_result_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    tender: Mapped[Tender] = relationship(back_populates="result")

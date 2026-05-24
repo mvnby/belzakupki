@@ -485,3 +485,217 @@ def fetch_tender_details(
         
         return parse_tender_details_html(response.text)
 
+
+def parse_tender_result_html(html: str) -> dict[str, Any] | None:
+    import re
+    soup = BeautifulSoup(html, "html.parser")
+    pre = soup.find("pre", class_="preview")
+    if not pre:
+        return None
+
+    text = pre.get_text(" ", strip=True)
+    
+    # 1. Parse status
+    status = "Состоялась"
+    decision_match = re.search(
+        r"(?:признать|процедуру)\s+закупки\s+.*?(состоявшейся|несостоявшейся|несостоявшимся)",
+        text,
+        re.IGNORECASE
+    )
+    if decision_match:
+        decision = decision_match.group(1).lower()
+        if "несостоявш" in decision:
+            status = "Признан несостоявшимся"
+        else:
+            status = "Состоялась"
+    elif "отменен" in text.lower() or "отменена" in text.lower():
+        status = "Отменена"
+    elif "несостоявшейся" in text.lower() or "не состоялась" in text.lower():
+        status = "Признан несостоявшимся"
+
+    # 2. Parse participants and winners
+    results_section = ""
+    parts = re.split(r"Результаты\s+оценки\s+и\s+сравнения\s+предложений", text, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        results_section = parts[1]
+    else:
+        # Fallback to commission decision section
+        parts = re.split(r"комиссия\s+приняла\s+решение", text, flags=re.IGNORECASE)
+        results_section = parts[1] if len(parts) > 1 else text
+
+    lines = [line.strip() for line in results_section.splitlines() if line.strip()]
+    participants = []
+    current = None
+
+    for line in lines:
+        m = re.match(r"^(\d+)\s+Код:\s+(\d+)\s+(.*?)(?:\s+Дата и время подачи:|$)", line)
+        if m:
+            if current:
+                participants.append(current)
+            
+            num = m.group(1)
+            code = m.group(2)
+            name = m.group(3).strip()
+            
+            date_match = re.search(r"Дата и время подачи:\s*([\d\.\s\:]+)", line)
+            date_str = date_match.group(1).strip() if date_match else None
+            
+            current = {
+                "name": name,
+                "unp": None,
+                "price": None,
+                "currency": None,
+                "place": None,
+                "winner": False,
+                "address": None,
+                "code": code,
+                "date": date_str
+            }
+        elif current:
+            # Address & UNP
+            if "Адрес:" in line:
+                addr_match = re.search(r"Адрес:\s*(.*?)(?:\s+УНП:|$)", line)
+                if addr_match:
+                    current["address"] = addr_match.group(1).strip()
+                unp_match = re.search(r"УНП:\s*(\d+)", line)
+                if unp_match:
+                    current["unp"] = unp_match.group(1).strip()
+                # Price from rate/offer if present in same line
+                price_match = re.search(r"(?:Ценовое предложение|Ставка):\s*(.*?)$", line)
+                if price_match:
+                    price_val = price_match.group(1).strip()
+                    current["price"] = price_val
+                    # Parse currency from price
+                    curr_m = re.search(r"(BYN|USD|EUR|RUB|rub|byn)", price_val, re.IGNORECASE)
+                    if curr_m:
+                        current["currency"] = curr_m.group(1).upper()
+            
+            # Place & Winner & Contract Price
+            if "Место:" in line or "Выбран победителем:" in line:
+                place_match = re.search(r"Место:\s*(\d+)", line)
+                if place_match:
+                    current["place"] = int(place_match.group(1))
+                    
+                winner_match = re.search(r"Выбран победителем:\s*(Да|Нет|да|нет)", line)
+                if winner_match:
+                    current["winner"] = winner_match.group(1).lower() == "да"
+                    
+                price_match = re.search(r"Цена договора:\s*(.*?)$", line)
+                if price_match:
+                    price_val = price_match.group(1).strip()
+                    current["price"] = price_val
+                    curr_m = re.search(r"(BYN|USD|EUR|RUB|rub|byn)", price_val, re.IGNORECASE)
+                    if curr_m:
+                        current["currency"] = curr_m.group(1).upper()
+
+    if current:
+        participants.append(current)
+
+    # 3. Heuristic: Check explicit winner declaration text
+    winner_name = None
+    contract_price = None
+    currency = None
+
+    winner_decl_match = re.search(
+        r"Участником-победителем\s+выбрать\s+(.*?)\s+с\s+ценой\s+договора\s+(.*?)(?:\n|$)",
+        text,
+        re.IGNORECASE
+    )
+    if winner_decl_match:
+        winner_name = winner_decl_match.group(1).strip()
+        price_val = winner_decl_match.group(2).strip().rstrip(".")
+        contract_price = price_val
+        curr_m = re.search(r"(BYN|USD|EUR|RUB|rub|byn)", price_val, re.IGNORECASE)
+        if curr_m:
+            currency = curr_m.group(1).upper()
+
+    # Find winner in participants list
+    winner_found = False
+    for p in participants:
+        if p["winner"]:
+            winner_name = p["name"]
+            contract_price = p["price"]
+            currency = p["currency"]
+            winner_found = True
+            break
+
+    if not winner_found and winner_name:
+        # Match declared winner name with participants to find UNP
+        for p in participants:
+            if p["name"].lower() in winner_name.lower() or winner_name.lower() in p["name"].lower():
+                p["winner"] = True
+                winner_unp = p["unp"]
+                break
+        else:
+            winner_unp = None
+    else:
+        # Get UNP from the matched participant
+        winner_unp = next((p["unp"] for p in participants if p["winner"]), None)
+
+    # Override status if winner is determined
+    if winner_name:
+        status = "Состоялась"
+
+    # Clean price value to decimal if possible
+    contract_price_decimal = None
+    if contract_price:
+        # Extract numbers, periods and commas
+        clean_price_str = re.sub(r"[^\d\.,]", "", str(contract_price)).replace(",", ".")
+        try:
+            from decimal import Decimal
+            contract_price_decimal = Decimal(clean_price_str)
+        except Exception:
+            pass
+
+    return {
+        "status": status,
+        "winner_name": winner_name,
+        "winner_unp": winner_unp,
+        "contract_price": contract_price_decimal,
+        "currency": currency or "BYN",
+        "participants": participants
+    }
+
+
+def fetch_tender_result(
+    tender_url: str,
+    *,
+    verify_ssl: bool | None = None,
+) -> dict[str, Any] | None:
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    headers = build_headers()
+
+    with httpx.Client(
+        follow_redirects=True,
+        headers=headers,
+        timeout=15,
+        verify=verify,
+    ) as client:
+        # Warm up session
+        client.get(BASE_URL).raise_for_status()
+        response = client.get(tender_url)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Search for protocol link
+        protocol_url = None
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            # Look for wprotocol or protocol pages
+            if "wprotocol" in href or "protocol" in href:
+                protocol_url = urljoin(tender_url, href)
+                break
+
+        if not protocol_url:
+            return None
+
+        # Fetch protocol page
+        prot_response = client.get(protocol_url)
+        prot_response.raise_for_status()
+
+        parsed = parse_tender_result_html(prot_response.text)
+        if parsed:
+            parsed["protocol_url"] = protocol_url
+        return parsed
+
