@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- FontAwesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=1.0.1">
 </head>
 <body>
     <div class="app-container">
@@ -249,12 +249,23 @@
                 <form id="profile-form">
                     <input type="hidden" id="form-profile-id">
                     <div class="form-group">
+                        <label for="form-profile-preset">Шаблон ниши (Пресет)</label>
+                        <select id="form-profile-preset" class="form-select" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--text-primary); padding: 8px 12px; width: 100%; outline: none; margin-top: 6px; margin-bottom: 12px;">
+                            <!-- Будет загружено динамически -->
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label for="form-profile-name">Название профиля <span class="required">*</span></label>
                         <input type="text" id="form-profile-name" required placeholder="Например: HVAC / Кондиционеры">
                     </div>
                     <div class="form-group">
-                        <label for="form-profile-description">Описание</label>
-                        <textarea id="form-profile-description" rows="2" placeholder="Краткое описание профиля..."></textarea>
+                        <label for="form-profile-description">Описание профиля</label>
+                        <textarea id="form-profile-description" rows="2" placeholder="Краткое описание профиля для себя..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-profile-niche-description">Описание ниши для ИИ (DeepSeek)</label>
+                        <textarea id="form-profile-niche-description" rows="6" placeholder="Детальное описание того, чем занимается ваш бизнес, что искать, а что исключать..." style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--text-primary); padding: 8px 12px; width: 100%; outline: none; margin-top: 6px; font-family: inherit; resize: vertical;"></textarea>
+                        <p class="form-help">Этот текст передается в ИИ для фильтрации тендеров и составления рекомендаций.</p>
                     </div>
                     
                     <div class="form-group">
@@ -391,6 +402,44 @@
                         <div class="details-row"><strong>Стоимость:</strong> <span id="modal-tender-value">-</span></div>
                         <div class="details-row"><strong>Оригинальная ссылка:</strong> <a href="#" id="modal-tender-link" target="_blank">Открыть первоисточник <i class="fa-solid fa-arrow-up-right-from-square"></i></a></div>
                     </div>
+
+                    <!-- Детальные метаданные (Контакты и условия) -->
+                    <div id="modal-tender-details-enriched" style="display:none; margin-top:20px;">
+                        <hr>
+                        <h4 style="margin-bottom:10px;"><i class="fa-solid fa-address-book"></i> Контактная информация</h4>
+                        <div class="details-section" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:8px;">
+                            <div class="details-row"><strong>ФИО контакта:</strong> <span id="modal-enriched-contact-name">-</span></div>
+                            <div class="details-row"><strong>Телефон:</strong> <span id="modal-enriched-contact-phone">-</span></div>
+                            <div class="details-row"><strong>E-mail:</strong> <span id="modal-enriched-contact-email">-</span></div>
+                        </div>
+
+                        <h4 style="margin-top:15px; margin-bottom:10px;"><i class="fa-solid fa-truck-ramp-box"></i> Условия закупки</h4>
+                        <div class="details-section" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:8px;">
+                            <div class="details-row"><strong>Условия поставки:</strong> <span id="modal-enriched-delivery-terms">-</span></div>
+                            <div class="details-row"><strong>Условия оплаты:</strong> <span id="modal-enriched-payment-terms">-</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Спецификация лотов -->
+                    <div id="modal-tender-lots-container" style="display:none; margin-top:20px;">
+                        <hr>
+                        <h4 style="margin-bottom:10px;"><i class="fa-solid fa-cubes"></i> Спецификация лотов</h4>
+                        <div class="table-wrapper" style="border:1px solid rgba(255,255,255,0.05); border-radius:8px; overflow:hidden;">
+                            <table class="recent-matches-table" style="margin-top:0; width:100%;">
+                                <thead>
+                                    <tr>
+                                        <th style="width:10%;">Лот</th>
+                                        <th style="width:45%;">Предмет закупки</th>
+                                        <th style="width:15%;">Кол-во</th>
+                                        <th style="width:15%;">ОКРБ</th>
+                                        <th style="width:15%;">Ориент. цена</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="modal-tender-lots-body">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                     
                     <!-- ИИ-анализ DeepSeek -->
                     <div id="modal-ai-analysis-container" style="display:none; margin-top:20px;">
@@ -427,6 +476,6 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=1.0.1"></script>
 </body>
 </html>

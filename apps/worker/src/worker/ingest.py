@@ -208,6 +208,38 @@ def score_tender(session: Session, tender: Tender) -> int:
     return matches_count
 
 
+def enrich_tender_if_needed(
+    session: Session,
+    tender: Tender,
+    was_created: bool,
+    matches_count: int,
+    source_code: str,
+) -> None:
+    """Запускает глубокий парсинг страницы тендера при его создании или совпадении с профилем.
+
+    Сливает полученные контакты, условия поставки и лоты в Tender.raw_data.
+    """
+    if was_created or matches_count > 0:
+        try:
+            if source_code == "goszakupki_by":
+                from worker.sources.goszakupki_by import fetch_tender_details
+            elif source_code == "icetrade_by":
+                from worker.sources.icetrade_by import fetch_tender_details
+            else:
+                return
+
+            logger.info(f"Enriching tender details for tender {tender.id} ({tender.url})...")
+            details = fetch_tender_details(tender.url)
+            
+            raw_data = dict(tender.raw_data or {})
+            raw_data.update(details)
+            tender.raw_data = raw_data
+            session.add(tender)
+            session.flush()
+        except Exception as e:
+            logger.warning(f"Failed to enrich tender {tender.id} details: {e}")
+
+
 def ingest_goszakupki_tenders(
     session: Session,
     *,
@@ -245,7 +277,9 @@ def ingest_goszakupki_tenders(
         else:
             updated += 1
 
-        matches += score_tender(session, tender)
+        matches_count = score_tender(session, tender)
+        matches += matches_count
+        enrich_tender_if_needed(session, tender, was_created, matches_count, SOURCE_CODE)
 
     run_ai_analysis_for_new_matches(session, SOURCE_CODE)
 
@@ -308,7 +342,9 @@ def ingest_icetrade_tenders(
         else:
             updated += 1
 
-        matches += score_tender(session, tender)
+        matches_count = score_tender(session, tender)
+        matches += matches_count
+        enrich_tender_if_needed(session, tender, was_created, matches_count, "icetrade_by")
 
     run_ai_analysis_for_new_matches(session, "icetrade_by")
 
@@ -371,15 +407,26 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         logger.error(f"Unknown source code: {source_code}")
         return
 
+    from belzakupki_db.presets import PRESETS
+
     for match in matches:
         tender = match.tender
         logger.info(f"AI Analyzing match {match.id} (Tender: {tender.title})")
+
+        profile = match.profile
+        default_hvac = PRESETS["hvac"]["description"]
+        niche_description = profile.niche_description or default_hvac
+        keywords = profile.keywords or []
+        negative_keywords = profile.negative_keywords or []
 
         try:
             # Stage 1: Metadata-based relevance check
             metadata_analysis = analyze_relevance_by_metadata(
                 title=tender.title,
                 customer=tender.customer_name or "Не указан",
+                niche_description=niche_description,
+                keywords=keywords,
+                negative_keywords=negative_keywords,
                 description=tender.description,
             )
 
@@ -462,6 +509,9 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                 title=tender.title,
                 customer=tender.customer_name or "Не указан",
                 documents_text=text_content or tender.title,
+                niche_description=niche_description,
+                keywords=keywords,
+                negative_keywords=negative_keywords,
             )
 
             if analysis is not None:

@@ -334,3 +334,154 @@ def fetch_tender_attachments(
                 })
         return attachments
 
+
+def parse_tender_details_html(html: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "html.parser")
+    
+    contacts = {"name": "", "phone": "", "email": ""}
+    delivery_terms = ""
+    payment_terms = ""
+    lots = []
+    
+    # 1. Parse DetailView tables for contacts and terms
+    for row in soup.find_all("tr"):
+        th = row.find(["th", "td"])
+        if not th:
+            continue
+        th_text = th.get_text(" ", strip=True).lower()
+        td = row.find_all(["td", "th"])
+        if len(td) < 2:
+            continue
+        td_val = normalize_html_text(td[1].get_text(" ", strip=True))
+        if not td_val:
+            continue
+            
+        # Contacts check
+        if "контакт" in th_text and not contacts["name"]:
+            contacts["name"] = td_val
+        elif "телефон" in th_text and not contacts["phone"]:
+            contacts["phone"] = td_val
+        elif ("email" in th_text or "e-mail" in th_text or "электронн" in th_text) and not contacts["email"]:
+            contacts["email"] = td_val
+            
+        # Terms check
+        elif "поставк" in th_text or "доставк" in th_text:
+            if delivery_terms:
+                delivery_terms += f"; {td_val}"
+            else:
+                delivery_terms = td_val
+        elif "оплат" in th_text or "финансирова" in th_text:
+            if payment_terms:
+                payment_terms += f"; {td_val}"
+            else:
+                payment_terms = td_val
+
+    # 2. Parse Lots Table
+    for table in soup.find_all("table"):
+        headers = [th.get_text(" ", strip=True).lower() for th in table.find_all("th")]
+        if not headers:
+            first_row = table.find("tr")
+            if first_row:
+                headers = [td.get_text(" ", strip=True).lower() for td in first_row.find_all("td")]
+                
+        is_lots_table = any("лот" in h or "предмет" in h or "окрб" in h or "количество" in h for h in headers)
+        if is_lots_table:
+            rows = table.find_all("tr")
+            for r in rows:
+                cells = r.find_all("td")
+                if len(cells) < 3:
+                    continue
+                
+                lot_num = ""
+                lot_name = ""
+                lot_qty = ""
+                lot_val = ""
+                lot_okrb = ""
+                
+                cell_texts = [normalize_html_text(c.get_text(" ", strip=True)) for c in cells]
+                
+                if any("лот" in text.lower() or "предмет" in text.lower() for text in cell_texts[:2]):
+                    continue
+                    
+                for idx, text in enumerate(cell_texts):
+                    if not text:
+                        continue
+                    
+                    # Match by headers first if headers are available
+                    header = headers[idx] if idx < len(headers) else ""
+                    if header:
+                        if any(word in header for word in ["кол-во", "количество", "объем"]) and not lot_qty:
+                            lot_qty = text
+                            continue
+                        if "окрб" in header and not lot_okrb:
+                            lot_okrb = text
+                            continue
+                        if any(word in header for word in ["стоимость", "сумма", "цена", "руб"]) and not lot_val:
+                            lot_val = text
+                            continue
+                        if any(word in header for word in ["лот", "№"]) and not lot_num:
+                            lot_num = text
+                            continue
+                        if any(word in header for word in ["предмет", "наименование", "описание"]) and not lot_name:
+                            lot_name = text
+                            continue
+
+                    # Fallback to heuristics
+                    if "лот" in text.lower() or (text.isdigit() and idx == 0):
+                        if not lot_num:
+                            lot_num = text
+                    elif len(text) > 15 and not lot_name:
+                        lot_name = text
+                    elif ("." in text or "," in text) and len(text) < 15 and not lot_okrb and any(c.isdigit() for c in text):
+                        # Avoid misidentifying quantities with periods
+                        if not any(word in text.lower() for word in ["шт", "услуг", "компл"]):
+                            lot_okrb = text
+                        
+                if not lot_num and cell_texts:
+                    lot_num = f"Лот {cell_texts[0]}"
+                if not lot_name and len(cell_texts) > 1:
+                    lot_name = cell_texts[1]
+                if not lot_qty and len(cell_texts) > 2:
+                    lot_qty = cell_texts[2]
+                if not lot_val and len(cell_texts) > 3:
+                    lot_val = cell_texts[3]
+                    
+                lots.append({
+                    "number": lot_num,
+                    "name": lot_name,
+                    "quantity": lot_qty,
+                    "estimated_value": lot_val,
+                    "okrb": lot_okrb
+                })
+            if lots:
+                break
+                
+    from typing import Any
+    return {
+        "contacts": contacts,
+        "delivery_terms": delivery_terms,
+        "payment_terms": payment_terms,
+        "lots": lots
+    }
+
+
+def fetch_tender_details(
+    tender_url: str,
+    *,
+    verify_ssl: bool | None = None,
+) -> dict[str, Any]:
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    headers = build_headers()
+    
+    with httpx.Client(
+        follow_redirects=True,
+        headers=headers,
+        timeout=15,
+        verify=verify,
+    ) as client:
+        client.get(BASE_URL).raise_for_status()
+        response = client.get(tender_url)
+        response.raise_for_status()
+        
+        return parse_tender_details_html(response.text)
+
