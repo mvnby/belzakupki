@@ -3,17 +3,20 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 import os
+import random
+import time
 from urllib.parse import urlencode, urljoin
 
+from loguru import logger
 import httpx
 from bs4 import BeautifulSoup
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 from worker.sources.base import extract_external_id, normalize_html_text
 from worker.sources.region_codes import ICETRADE_REGION_MAP, map_regions
 
 BASE_URL = "https://icetrade.by"
 URL = f"{BASE_URL}/search/auctions"
-USER_AGENT = "belzakupki/0.1 (+https://github.com/mvnby/belzakupki)"
 VITEBSK_REGION_ID = "2"
 HVAC_VITEBSK_TERMS = (
     "кондиционер",
@@ -21,6 +24,15 @@ HVAC_VITEBSK_TERMS = (
     "сплит система",
     "вентиляционное оборудование",
 )
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
 
 
 @dataclass(frozen=True)
@@ -51,8 +63,59 @@ def should_verify_ssl() -> bool:
 
 
 def build_headers() -> dict[str, str]:
-    headers = {"User-Agent": USER_AGENT}
+    headers = {"User-Agent": random.choice(USER_AGENTS)}
     return headers
+
+
+def _apply_throttling() -> None:
+    min_delay = float(os.getenv("ICETRADE_MIN_DELAY", "1.0"))
+    max_delay = float(os.getenv("ICETRADE_MAX_DELAY", "3.0"))
+    if max_delay > min_delay:
+        delay = random.uniform(min_delay, max_delay)
+        logger.debug(f"IceTrade throttling: sleeping for {delay:.2f}s...")
+        time.sleep(delay)
+    elif min_delay > 0:
+        logger.debug(f"IceTrade throttling: sleeping for {min_delay:.2f}s...")
+        time.sleep(min_delay)
+
+
+def _create_client(verify_ssl: bool) -> httpx.Client:
+    proxy = os.getenv("ICETRADE_PROXY")
+    return httpx.Client(
+        follow_redirects=True,
+        timeout=15,
+        verify=verify_ssl,
+        proxy=proxy,
+    )
+
+
+def is_retryable_exception(exception: Exception) -> bool:
+    if isinstance(exception, httpx.HTTPStatusError):
+        return exception.response.status_code in (429, 502, 503, 504)
+    return isinstance(exception, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError))
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception(is_retryable_exception),
+    reraise=True,
+)
+def _execute_request(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    **kwargs,
+) -> httpx.Response:
+    _apply_throttling()
+    headers = kwargs.pop("headers", None) or {}
+    headers.update(build_headers())
+    kwargs["headers"] = headers
+    
+    logger.debug(f"IceTrade request: {method} {url} with User-Agent: {headers.get('User-Agent')}")
+    response = client.request(method, url, **kwargs)
+    response.raise_for_status()
+    return response
 
 
 def build_search_params(search: IcetradeSearch | None) -> list[tuple[str, str]]:
@@ -168,15 +231,8 @@ def fetch_tenders(
 ) -> list[dict]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
 
-    with httpx.Client(
-        follow_redirects=True,
-        headers=build_headers(),
-        timeout=10,
-        verify=verify,
-    ) as client:
-        response = client.get(build_search_url(search))
-        response.raise_for_status()
-
+    with _create_client(verify) as client:
+        response = _execute_request(client, "GET", build_search_url(search))
         return parse_tenders_html(response.text, limit=limit, search=search)
 
 
@@ -190,19 +246,13 @@ def fetch_tenders_for_searches(
     tenders: list[dict] = []
     seen_external_ids: set[str] = set()
 
-    with httpx.Client(
-        follow_redirects=True,
-        headers=build_headers(),
-        timeout=10,
-        verify=verify,
-    ) as client:
+    with _create_client(verify) as client:
         for search in searches:
             remaining = None if limit is None else limit - len(tenders)
             if remaining is not None and remaining <= 0:
                 break
 
-            response = client.get(build_search_url(search))
-            response.raise_for_status()
+            response = _execute_request(client, "GET", build_search_url(search))
 
             items = parse_tenders_html(
                 response.text,
@@ -283,16 +333,9 @@ def fetch_tender_attachments(
     verify_ssl: bool | None = None,
 ) -> list[dict[str, str]]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
-    headers = build_headers()
     
-    with httpx.Client(
-        follow_redirects=True,
-        headers=headers,
-        timeout=15,
-        verify=verify,
-    ) as client:
-        response = client.get(tender_url)
-        response.raise_for_status()
+    with _create_client(verify) as client:
+        response = _execute_request(client, "GET", tender_url)
         
         soup = BeautifulSoup(response.text, "html.parser")
         attachments = []
@@ -606,16 +649,9 @@ def fetch_tender_result(
     verify_ssl: bool | None = None,
 ) -> dict[str, Any] | None:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
-    headers = build_headers()
 
-    with httpx.Client(
-        follow_redirects=True,
-        headers=headers,
-        timeout=15,
-        verify=verify,
-    ) as client:
-        response = client.get(tender_url)
-        response.raise_for_status()
+    with _create_client(verify) as client:
+        response = _execute_request(client, "GET", tender_url)
 
         soup = BeautifulSoup(response.text, "html.parser")
         
@@ -631,8 +667,7 @@ def fetch_tender_result(
             return None
 
         # Fetch result page
-        res_response = client.get(result_url)
-        res_response.raise_for_status()
+        res_response = _execute_request(client, "GET", result_url)
 
         parsed = parse_tender_result_html(res_response.text)
         if parsed:
