@@ -488,10 +488,21 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                         with httpx.Client(follow_redirects=True, headers=headers, verify=verify, timeout=20) as client:
                             if source_code == "goszakupki_by":
                                 client.get("https://goszakupki.by")
-                            response = client.get(file_url)
-                            response.raise_for_status()
-                            with open(local_path, "wb") as f:
-                                f.write(response.content)
+                            
+                            MAX_SIZE_LIMIT = 15 * 1024 * 1024
+                            with client.stream("GET", file_url) as r:
+                                r.raise_for_status()
+                                content_length = r.headers.get("Content-Length")
+                                if content_length and int(content_length) > MAX_SIZE_LIMIT:
+                                    raise ValueError(f"File size exceeds limit: {content_length} bytes")
+                                
+                                total_bytes = 0
+                                with open(local_path, "wb") as f:
+                                    for chunk in r.iter_bytes(chunk_size=8192):
+                                        total_bytes += len(chunk)
+                                        if total_bytes > MAX_SIZE_LIMIT:
+                                            raise ValueError("File size exceeded limit of 15 MB during download")
+                                        f.write(chunk)
 
                         file_text = extract_text_from_file(local_path)
                         if file_text:
