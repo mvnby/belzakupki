@@ -16,6 +16,10 @@ from belzakupki_db.enums import MatchStatus, NotificationStatus
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
+    """Выполняет прямой POST-запрос к Telegram Bot API для отправки сообщения.
+
+    Поддерживает HTML-разметку и инлайн-клавиатуру reply_markup.
+    """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -36,6 +40,11 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup:
 
 
 def format_tender_message(match: TenderMatch) -> str:
+    """Форматирует HTML-текст сообщения для Telegram.
+
+    Сюда включаются метаданные тендера (заказчик, стоимость, дедлайн)
+    и выжимка из ИИ-анализа (объем работ, требования, бюджет).
+    """
     tender = match.tender
     profile = match.profile
     
@@ -92,6 +101,14 @@ def format_tender_message(match: TenderMatch) -> str:
 
 
 def dispatch_notifications(session: Session) -> int:
+    """Извлекает из базы данных новые совпадения и рассылает их по каналам уведомлений.
+
+    - Исключает совпадения, забракованные ИИ на этапе экспресс-анализа.
+    - Исключает тендеры, у которых истек дедлайн подачи заявок.
+    - Для каждого активного канала (например, Telegram) отправляет сообщение с инлайн-кнопками.
+    - Фиксирует факты отправки в таблице notification_logs.
+    - Переводит статус совпадения в 'processed'.
+    """
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     
     # Находим все совпадения со статусом 'new'

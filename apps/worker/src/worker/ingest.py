@@ -37,11 +37,16 @@ class IngestStats:
 
 
 def content_hash(value: dict[str, Any]) -> str:
+    """Вычисляет SHA-256 хеш содержимого словаря тендера для отслеживания изменений."""
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def get_or_create_source(session: Session, code: str, name: str, base_url: str) -> TenderSource:
+    """Возвращает существующий TenderSource из БД или создает его, если он отсутствует.
+
+    Использует savepoint (begin_nested) для безопасной обработки race condition в многопоточной среде.
+    """
     source = session.execute(
         select(TenderSource).where(TenderSource.code == code)
     ).scalar_one_or_none()
@@ -73,6 +78,10 @@ from datetime import datetime, timezone, timedelta
 import re
 
 def parse_deadline_string(deadline_str: str | None) -> datetime | None:
+    """Парсит строковое представление даты дедлайна (формат DD.MM.YYYY [HH:MM])
+
+    и преобразует его в UTC datetime, учитывая часовой пояс Минска (UTC+3).
+    """
     if not deadline_str:
         return None
         
@@ -97,6 +106,10 @@ def upsert_tender(
     source: TenderSource,
     item: dict[str, Any],
 ) -> tuple[Tender, bool]:
+    """Вставляет новый или обновляет существующий тендер в базе данных.
+
+    Сравнивает хеши контента. Возвращает кортеж (Tender, is_created).
+    """
     external_id = str(item["external_id"])
     item_hash = content_hash(item)
     deadline_dt = parse_deadline_string(item.get("deadline"))
@@ -137,6 +150,11 @@ def upsert_tender(
 
 
 def score_tender(session: Session, tender: Tender) -> int:
+    """Проводит морфологический скоринг текста тендера по всем активным профилям поиска.
+
+    При совпадении ключевых слов создает или обновляет TenderMatch.
+    Возвращает количество созданных/обновленных совпадений.
+    """
     profiles = session.execute(
         select(SearchProfile).where(SearchProfile.is_active.is_(True))
     ).scalars()
@@ -194,6 +212,11 @@ def ingest_goszakupki_tenders(
     search_preset: str | None = None,
     commit: bool = True,
 ) -> IngestStats:
+    """Сбор тендеров с goszakupki.by.
+
+    Поддерживает динамический сбор по ключевым словам профилей (profiles),
+    предопределенные поиски (search_preset='hvac-vitebsk') или общий список.
+    """
     source = get_or_create_source(session, SOURCE_CODE, SOURCE_NAME, BASE_URL)
 
     if profiles is not None:
@@ -241,6 +264,11 @@ def ingest_icetrade_tenders(
     search_preset: str | None = None,
     commit: bool = True,
 ) -> IngestStats:
+    """Сбор тендеров с icetrade.by.
+
+    Поддерживает динамический сбор по ключевым словам профилей (profiles),
+    предопределенные поиски (search_preset='hvac-vitebsk') или общий список.
+    """
     from worker.sources.icetrade_by import (
         BASE_URL as ICETRADE_BASE_URL,
         fetch_hvac_vitebsk_tenders as fetch_icetrade_hvac,
@@ -292,6 +320,11 @@ def ingest_icetrade_tenders(
 
 
 def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
+    """Запускает двухэтапную ИИ-проверку релевантности тендеров через DeepSeek API.
+
+    Этап 1: Экспресс-анализ метаданных (название, описание, заказчик). Если не подходит -> отклонение.
+    Этап 2: Скачивание вложений (.pdf, .docx, .xlsx), извлечение текста и глубокий анализ требований/бюджета.
+    """
     token = os.getenv("DEEPSEEK_TOKEN")
     if not token or token == "your-deepseek-token":
         logger.info("DEEPSEEK_TOKEN not configured. Skipping AI analysis.")

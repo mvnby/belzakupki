@@ -1,3 +1,8 @@
+"""Управление сессиями базы данных SQLAlchemy.
+
+Настраивает движок подключения (engine) и фабрику сессий (SessionLocal).
+Предоставляет генератор для автоматического управления транзакциями.
+"""
 from __future__ import annotations
 
 import os
@@ -25,6 +30,11 @@ SessionLocal = sessionmaker(
 
 
 def get_session() -> Generator[Session, None, None]:
+    """Генератор контекста сессии базы данных для использования в FastAPI (Depends) или CLI.
+
+    Автоматически делает rollback при возникновении любого исключения и гарантирует
+    закрытие соединения (close) в блоке finally.
+    """
     session = SessionLocal()
 
     try:

@@ -13,6 +13,10 @@ from belzakupki_db.enums import MatchStatus
 from worker.notifications import format_tender_message, send_telegram_message
 
 def answer_callback_query(bot_token: str, callback_query_id: str, text: str | None = None) -> None:
+    """Отправляет ответ на callback query в Telegram, чтобы у пользователя исчез индикатор загрузки на кнопке.
+
+    Может опционально показывать всплывающее уведомление (toast).
+    """
     url = f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery"
     payload = {
         "callback_query_id": callback_query_id,
@@ -27,6 +31,7 @@ def answer_callback_query(bot_token: str, callback_query_id: str, text: str | No
         logger.error(f"Error answering callback query: {e}")
 
 def edit_message_text(bot_token: str, chat_id: str, message_id: int, text: str, reply_markup: dict | None = None) -> None:
+    """Изменяет текст и инлайн-клавиатуру уже отправленного сообщения в Telegram."""
     url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
     payload = {
         "chat_id": chat_id,
@@ -45,6 +50,13 @@ def edit_message_text(bot_token: str, chat_id: str, message_id: int, text: str, 
         logger.error(f"Error editing message text: {e}")
 
 def handle_callback_query(bot_token: str, callback_query: dict) -> None:
+    """Обрабатывает нажатия на инлайн-кнопки под карточкой тендера в Telegram.
+
+    Поддерживает действия:
+    - detail: Отправить полное обоснование и ТЗ ИИ новым сообщением.
+    - accept: Перевести статус совпадения в 'accepted', убрать кнопки, добавить пометку об одобрении.
+    - reject: Перевести статус совпадения в 'rejected', убрать кнопки, добавить пометку об отклонении.
+    """
     callback_query_id = callback_query["id"]
     data = callback_query.get("data", "")
     message = callback_query.get("message")
@@ -137,6 +149,10 @@ def handle_callback_query(bot_token: str, callback_query: dict) -> None:
         session.close()
 
 def start_telegram_bot_listener() -> None:
+    """Запускает бесконечный цикл long polling (getUpdates) для получения событий Telegram-бота.
+
+    Слушает события типа callback_query для обработки нажатий на инлайн-кнопки.
+    """
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not bot_token or bot_token == "your-bot-token":
         logger.warning("TELEGRAM_BOT_TOKEN is not set. Telegram bot updates listener will not start.")

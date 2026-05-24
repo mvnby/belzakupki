@@ -63,6 +63,11 @@ status_lock = threading.Lock()
 
 
 def run_ingest_task():
+    """Фоновая задача сбора тендеров (Dev-режим).
+
+    Считывает активные профили и запускает сбор с госзакупок и icetrade.
+    В промышленной среде планировщик запускается как отдельный демон-поток в воркере.
+    """
     global task_status
     with status_lock:
         if task_status["ingest"] == "running":
@@ -85,6 +90,10 @@ def run_ingest_task():
 
 
 def run_notify_task():
+    """Фоновая задача рассылки уведомлений (Dev-режим).
+
+    Инициирует отправку уведомлений по всем новым совпадениям.
+    """
     global task_status
     with status_lock:
         if task_status["notify"] == "running":
@@ -106,6 +115,7 @@ def run_notify_task():
 
 @app.get("/", response_class=HTMLResponse)
 def read_dashboard():
+    """Раздает главную страницу панели управления (HTML)."""
     file_path = "apps/api/static/index.html"
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Frontend HTML file not found")
@@ -133,6 +143,7 @@ def read_app_js():
 
 @app.get("/api/stats", dependencies=[Depends(require_api_key)])
 def get_stats(session: Session = Depends(get_session)):
+    """Возвращает агрегированную статистику по тендерам, совпадениям и уведомлениям, а также статус фоновых задач."""
     total_tenders = session.query(func.count(Tender.id)).scalar() or 0
     total_matches = session.query(func.count(TenderMatch.id)).scalar() or 0
     
@@ -165,6 +176,7 @@ def get_profiles(
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ):
+    """Возвращает список всех поисковых профилей."""
     return (
         session.query(SearchProfile)
         .order_by(SearchProfile.id.asc())
@@ -176,6 +188,7 @@ def get_profiles(
 
 @app.post("/api/profiles", response_model=SearchProfileResponse, dependencies=[Depends(require_api_key)])
 def create_profile(data: SearchProfileCreate, session: Session = Depends(get_session)):
+    """Создает новый поисковый профиль."""
     profile = SearchProfile(
         name=data.name,
         description=data.description,
@@ -195,6 +208,7 @@ def create_profile(data: SearchProfileCreate, session: Session = Depends(get_ses
 
 @app.put("/api/profiles/{profile_id}", response_model=SearchProfileResponse, dependencies=[Depends(require_api_key)])
 def update_profile(profile_id: int, data: SearchProfileUpdate, session: Session = Depends(get_session)):
+    """Обновляет параметры существующего поискового профиля."""
     profile = session.query(SearchProfile).filter(SearchProfile.id == profile_id).one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -225,6 +239,7 @@ def update_profile(profile_id: int, data: SearchProfileUpdate, session: Session 
 
 @app.delete("/api/profiles/{profile_id}", dependencies=[Depends(require_api_key)])
 def delete_profile(profile_id: int, session: Session = Depends(get_session)):
+    """Удаляет поисковый профиль по его ID."""
     profile = session.query(SearchProfile).filter(SearchProfile.id == profile_id).one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -238,11 +253,13 @@ def delete_profile(profile_id: int, session: Session = Depends(get_session)):
 
 @app.get("/api/profiles/{profile_id}/channels", response_model=list[NotificationChannelResponse], dependencies=[Depends(require_api_key)])
 def get_profile_channels(profile_id: int, session: Session = Depends(get_session)):
+    """Возвращает все настроенные каналы уведомлений для указанного поискового профиля."""
     return session.query(NotificationChannel).filter(NotificationChannel.profile_id == profile_id).all()
 
 
 @app.post("/api/profiles/{profile_id}/channels", response_model=NotificationChannelResponse, dependencies=[Depends(require_api_key)])
 def create_or_update_channel(profile_id: int, data: NotificationChannelCreate, session: Session = Depends(get_session)):
+    """Создает новый или обновляет существующий канал уведомлений для указанного профиля."""
     # Проверяем, существует ли профиль
     profile = session.query(SearchProfile).filter(SearchProfile.id == profile_id).one_or_none()
     if not profile:
@@ -276,6 +293,7 @@ def create_or_update_channel(profile_id: int, data: NotificationChannelCreate, s
 
 @app.post("/api/actions/ingest", dependencies=[Depends(require_api_key)])
 def trigger_ingest(background_tasks: BackgroundTasks):
+    """Инициирует асинхронный запуск фоновой задачи сбора новых тендеров."""
     global task_status
     with status_lock:
         if task_status["ingest"] == "running":
@@ -286,6 +304,7 @@ def trigger_ingest(background_tasks: BackgroundTasks):
 
 @app.post("/api/actions/notify", dependencies=[Depends(require_api_key)])
 def trigger_notify(background_tasks: BackgroundTasks):
+    """Инициирует асинхронный запуск фоновой задачи отправки уведомлений."""
     global task_status
     with status_lock:
         if task_status["notify"] == "running":
@@ -304,6 +323,7 @@ def tenders(
     q: str | None = Query(default=None, min_length=1),
     session: Session = Depends(get_session),
 ):
+    """Возвращает список сохраненных тендеров с поддержкой фильтрации и текстового поиска."""
     items = list_tenders(
         session,
         limit=limit,
@@ -321,6 +341,7 @@ def tenders(
 
 @app.get("/api/tenders/{tender_id}", dependencies=[Depends(require_api_key)])
 def tender(tender_id: int, session: Session = Depends(get_session)):
+    """Возвращает детальную информацию о конкретном тендере по его ID."""
     item = get_tender(session, tender_id)
 
     if item is None:
@@ -335,6 +356,7 @@ def matches(
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ):
+    """Возвращает список совпадений тендеров с профилями поиска, отсортированный по уровню соответствия."""
     items = list_matches(session, limit=limit, offset=offset)
 
     return {
