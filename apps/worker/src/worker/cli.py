@@ -204,3 +204,70 @@ def check_results() -> None:
     print("Results check complete.")
 
 
+def ingest_butb() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Send notifications immediately after ingest.",
+    )
+    args = parser.parse_args()
+
+    from worker.ingest import ingest_butb_tenders
+
+    with SessionLocal() as session:
+        stats = ingest_butb_tenders(
+            session,
+            limit=args.limit,
+        )
+
+        print(
+            "BUTB Ingest done: "
+            f"fetched={stats.fetched} "
+            f"created={stats.created} "
+            f"updated={stats.updated} "
+            f"matches={stats.matches}"
+        )
+
+        if args.notify:
+            from worker.notifications import dispatch_notifications
+            print("Sending notifications...")
+            count = dispatch_notifications(session)
+            print(f"Sent messages for {count} matches.")
+
+
+def ingest_gias() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Send notifications immediately after ingest.",
+    )
+    args = parser.parse_args()
+
+    from worker.ingest import ingest_gias_tenders
+
+    with SessionLocal() as session:
+        stats = ingest_gias_tenders(
+            session,
+            limit=args.limit,
+        )
+
+        print(
+            "GIAS Ingest done: "
+            f"fetched={stats.fetched} "
+            f"created={stats.created} "
+            f"updated={stats.updated} "
+            f"matches={stats.matches}"
+        )
+
+        if args.notify:
+            from worker.notifications import dispatch_notifications
+            print("Sending notifications...")
+            count = dispatch_notifications(session)
+            print(f"Sent messages for {count} matches.")
+
+
+

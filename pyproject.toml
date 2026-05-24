@@ -54,6 +54,8 @@ belzakupki-list-tenders = "worker.cli:show_tenders"
 belzakupki-list-matches = "worker.cli:show_matches"
 belzakupki-send-notifications = "worker.cli:send_notifications"
 belzakupki-check-results = "worker.cli:check_results"
+belzakupki-ingest-butb = "worker.cli:ingest_butb"
+belzakupki-ingest-gias = "worker.cli:ingest_gias"
 
 
 [tool.setuptools.packages.find]

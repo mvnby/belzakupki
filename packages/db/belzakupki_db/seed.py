@@ -54,6 +54,28 @@ def seed_tender_sources(session: Session) -> None:
     else:
         icetrade_source.name = "icetrade.by"
 
+    gias_source = session.query(TenderSource).filter_by(code="gias_by").one_or_none()
+    if gias_source is None:
+        gias_source = TenderSource(
+            code="gias_by",
+            name="gias.by",
+            base_url="https://gias.by",
+        )
+        session.add(gias_source)
+    else:
+        gias_source.name = "gias.by"
+
+    butb_source = session.query(TenderSource).filter_by(code="butb_by").one_or_none()
+    if butb_source is None:
+        butb_source = TenderSource(
+            code="butb_by",
+            name="butb.by",
+            base_url="https://zakupki.butb.by",
+        )
+        session.add(butb_source)
+    else:
+        butb_source.name = "butb.by"
+
 
 def seed_search_profiles(session: Session) -> None:
     profile = session.query(SearchProfile).filter_by(name=HVAC_PROFILE_NAME).one_or_none()
