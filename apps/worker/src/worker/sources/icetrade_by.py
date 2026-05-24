@@ -460,3 +460,183 @@ def fetch_tender_details(
         
         return parse_tender_details_html(response.text)
 
+
+def parse_tender_result_html(html: str) -> dict[str, Any] | None:
+    import re
+    soup = BeautifulSoup(html, "html.parser")
+    
+    status = "Состоялась"
+    winner_name = None
+    winner_unp = None
+    contract_price = None
+    currency = "BYN"
+    participants = []
+    others_text = ""
+
+    # Find tables that contain result details
+    target_table = None
+    for table in soup.find_all("table"):
+        table_text = table.get_text(" ", strip=True).lower()
+        if "результат процедуры закупки" in table_text or "участники, с которыми заключен договор" in table_text:
+            target_table = table
+            break
+
+    if not target_table:
+        return None
+
+    rows = target_table.find_all("tr")
+    for idx, row in enumerate(rows):
+        cells = [normalize_html_text(c.get_text(" ", strip=True)) for c in row.find_all(["td", "th"])]
+        if not cells:
+            continue
+
+        cells_lower = [c.lower() for c in cells]
+
+        # 1. Check for winner and price headers
+        if len(cells) >= 4 and any("участники" in h for h in cells_lower[2:3]) and any("цена" in h for h in cells_lower[3:4]):
+            # The next row contains the winner and contract price
+            if idx + 1 < len(rows):
+                next_cells = [normalize_html_text(c.get_text(" ", strip=True)) for c in rows[idx+1].find_all(["td", "th"])]
+                if len(next_cells) >= 4:
+                    winner_name = next_cells[2]
+                    contract_price = next_cells[3]
+                    curr_m = re.search(r"(BYN|USD|EUR|RUB|rub|byn)", str(contract_price), re.IGNORECASE)
+                    if curr_m:
+                        currency = curr_m.group(1).upper()
+
+        # 2. Check for result status
+        for cell_idx, cell in enumerate(cells):
+            if "результат процедуры закупки" in cell.lower() and cell_idx + 1 < len(cells):
+                res_val = cells[cell_idx + 1]
+                if "состоялась" in res_val.lower():
+                    status = "Состоялась"
+                elif "несостоявшейся" in res_val.lower() or "не состоялась" in res_val.lower():
+                    status = "Признан несостоявшимся"
+                elif "отменен" in res_val.lower() or "отменена" in res_val.lower():
+                    status = "Отменена"
+                else:
+                    status = res_val
+
+        # 3. Check for Winner UNP
+        if any("унп участников" in c.lower() for c in cells) and len(cells) >= 2:
+            winner_unp = cells[1]
+
+        # 4. Check for other participants text
+        if any("иные участники" in c.lower() for c in cells) and len(cells) >= 2:
+            others_text = cells[1]
+
+    # Clean price value to decimal if possible
+    contract_price_decimal = None
+    if contract_price:
+        clean_price_str = re.sub(r"[^\d\.,]", "", str(contract_price)).replace(",", ".")
+        try:
+            from decimal import Decimal
+            contract_price_decimal = Decimal(clean_price_str)
+        except Exception:
+            pass
+
+    # Build participants list
+    if winner_name and winner_name != "-":
+        participants.append({
+            "name": winner_name,
+            "unp": winner_unp if winner_unp and winner_unp != "-" else None,
+            "price": contract_price,
+            "winner": True
+        })
+
+    # Parse other participants
+    if others_text:
+        # Split by ';' to separate companies
+        # Each part can be: ООО «НОВАСТАР», УНП 491319658 246007, г. Гомель - 39120,00 (отклонен)
+        parts = others_text.split(";")
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            # Simple heuristics to find name, UNP and price
+            # Extract UNP
+            unp_m = re.search(r"УНП\s*(\d+)", part)
+            p_unp = unp_m.group(1) if unp_m else None
+            
+            # Extract price: usually after '-' or at the end
+            # e.g. - 38137,00 or - 27700,00 (отклонен)
+            price_m = re.search(r"-\s*([\d\s\.,]+)", part)
+            p_price = price_m.group(1).strip() if price_m else None
+            
+            # Extract name: everything before UNP or before '-'
+            p_name = part
+            if unp_m:
+                p_name = part.split("УНП")[0].strip(", ")
+            elif price_m:
+                p_name = part.split("-")[0].strip(", ")
+                
+            # Clean name
+            p_name = re.sub(r"\s+", " ", p_name).strip()
+            
+            # Winner status
+            p_winner = False
+            if winner_name and p_name.lower() in winner_name.lower():
+                p_winner = True
+
+            # Avoid adding winner twice
+            if p_winner and any(p["winner"] for p in participants):
+                continue
+
+            participants.append({
+                "name": p_name,
+                "unp": p_unp,
+                "price": p_price,
+                "winner": p_winner
+            })
+
+    return {
+        "status": status,
+        "winner_name": winner_name if winner_name != "-" else None,
+        "winner_unp": winner_unp if winner_unp != "-" else None,
+        "contract_price": contract_price_decimal,
+        "currency": currency,
+        "participants": participants
+    }
+
+
+def fetch_tender_result(
+    tender_url: str,
+    *,
+    verify_ssl: bool | None = None,
+) -> dict[str, Any] | None:
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    headers = build_headers()
+
+    with httpx.Client(
+        follow_redirects=True,
+        headers=headers,
+        timeout=15,
+        verify=verify,
+    ) as client:
+        response = client.get(tender_url)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Search for result link
+        result_url = None
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "viewResult" in href:
+                result_url = urljoin(tender_url, href)
+                break
+
+        if not result_url:
+            return None
+
+        # Fetch result page
+        res_response = client.get(result_url)
+        res_response.raise_for_status()
+
+        parsed = parse_tender_result_html(res_response.text)
+        if parsed:
+            parsed["result_url"] = result_url
+        return parsed
+
+

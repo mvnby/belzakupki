@@ -39,6 +39,19 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
                 ai_analysis = match.ai_analysis
                 break
 
+    result_data = None
+    if tender.result:
+        result_data = {
+            "status": tender.result.status,
+            "winner_name": tender.result.winner_name,
+            "winner_unp": tender.result.winner_unp,
+            "contract_price": _decimal_to_float(tender.result.contract_price),
+            "currency": tender.result.currency,
+            "participants": tender.result.raw_result_data.get("participants", []) if tender.result.raw_result_data else [],
+            "result_url": tender.result.raw_result_data.get("result_url") if tender.result.raw_result_data else None,
+            "protocol_url": tender.result.raw_result_data.get("protocol_url") if tender.result.raw_result_data else None
+        }
+
     return {
         "id": tender.id,
         "source": tender.source.code if tender.source else None,
@@ -67,6 +80,7 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
         "lots": raw_data.get("lots") or [],
         "ai_relevance": ai_relevance,
         "ai_analysis": ai_analysis,
+        "result": result_data,
     }
 
 
@@ -109,7 +123,10 @@ def list_tenders(
     """
     stmt: Select[tuple[Tender]] = (
         select(Tender)
-        .options(joinedload(Tender.source))
+        .options(
+            joinedload(Tender.source),
+            joinedload(Tender.result)
+        )
         .order_by(Tender.created_at.desc(), Tender.id.desc())
     )
 
@@ -136,6 +153,7 @@ def get_tender(session: Session, tender_id: int) -> Tender | None:
         .options(
             joinedload(Tender.source),
             joinedload(Tender.matches),
+            joinedload(Tender.result),
         )
         .where(Tender.id == tender_id)
     ).unique().scalar_one_or_none()
@@ -158,6 +176,7 @@ def list_matches(
         .options(
             joinedload(TenderMatch.profile),
             joinedload(TenderMatch.tender).joinedload(Tender.source),
+            joinedload(TenderMatch.tender).joinedload(Tender.result),
         )
         .order_by(
             TenderMatch.score.desc(),

@@ -465,6 +465,36 @@
                         <h4 style="margin-bottom:10px;">📁 Прикрепленные документы</h4>
                         <div id="modal-attachments-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
+
+                    <!-- Результаты закупки -->
+                    <div id="modal-tender-result-container" style="display:none; margin-top:20px;">
+                        <hr>
+                        <h4 style="margin-bottom:10px;"><i class="fa-solid fa-trophy" style="color:#ffd700;"></i> Результаты закупки</h4>
+                        <div class="details-section" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:8px; margin-bottom:15px;">
+                            <div class="details-row"><strong>Статус закупки:</strong> <span id="modal-result-status">-</span></div>
+                            <div class="details-row"><strong>Победитель:</strong> <span id="modal-result-winner">-</span></div>
+                            <div class="details-row"><strong>УНП победителя:</strong> <span id="modal-result-unp">-</span></div>
+                            <div class="details-row"><strong>Сумма договора:</strong> <span id="modal-result-price">-</span></div>
+                            <div class="details-row" id="modal-result-protocol-row" style="display:none;"><strong>Протокол:</strong> <a href="#" id="modal-result-protocol-link" target="_blank">Протокол выбора победителя <i class="fa-solid fa-arrow-up-right-from-square"></i></a></div>
+                        </div>
+
+                        <h5 style="margin-bottom:8px;"><i class="fa-solid fa-users"></i> Реестр предложений участников</h5>
+                        <div class="table-wrapper" style="border:1px solid rgba(255,255,255,0.05); border-radius:8px; overflow:hidden;">
+                            <table class="recent-matches-table" style="margin-top:0; width:100%;">
+                                <thead>
+                                    <tr>
+                                        <th style="width:50%;">Участник</th>
+                                        <th style="width:15%;">УНП</th>
+                                        <th style="width:20%;">Предложение</th>
+                                        <th style="width:15%;">Статус</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="modal-result-participants-body">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     <hr>
                     <h4>Сырые JSON данные (Raw Data)</h4>
                     <pre class="json-viewer"><code id="modal-tender-json"></code></pre>
