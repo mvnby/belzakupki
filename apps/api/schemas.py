@@ -5,6 +5,8 @@ from datetime import datetime
 class SearchProfileBase(BaseModel):
     name: str = Field(..., max_length=255)
     description: Optional[str] = None
+    preset_code: Optional[str] = None
+    niche_description: Optional[str] = None
     keywords: List[str] = Field(default_factory=list)
     negative_keywords: List[str] = Field(default_factory=list)
     regions: List[str] = Field(default_factory=list)
@@ -19,6 +21,8 @@ class SearchProfileCreate(SearchProfileBase):
 class SearchProfileUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = None
+    preset_code: Optional[str] = None
+    niche_description: Optional[str] = None
     keywords: Optional[List[str]] = None
     negative_keywords: Optional[List[str]] = None
     regions: Optional[List[str]] = None
