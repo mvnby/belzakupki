@@ -166,6 +166,8 @@ def list_matches(
     *,
     limit: int = 20,
     offset: int = 0,
+    profile_id: int | None = None,
+    status: str | None = None,
 ) -> list[TenderMatch]:
     """Возвращает список совпадений тендеров, отсортированных по баллу релевантности (убывание).
 
@@ -178,11 +180,21 @@ def list_matches(
             joinedload(TenderMatch.tender).joinedload(Tender.source),
             joinedload(TenderMatch.tender).joinedload(Tender.result),
         )
-        .order_by(
-            TenderMatch.score.desc(),
-            TenderMatch.created_at.desc(),
-            TenderMatch.id.desc(),
-        )
+    )
+
+    if profile_id is not None:
+        stmt = stmt.where(TenderMatch.profile_id == profile_id)
+
+    if status is not None:
+        if status == "new_processed":
+            stmt = stmt.where(TenderMatch.status.in_(["new", "processed"]))
+        else:
+            stmt = stmt.where(TenderMatch.status == status)
+
+    stmt = stmt.order_by(
+        TenderMatch.score.desc(),
+        TenderMatch.created_at.desc(),
+        TenderMatch.id.desc(),
     )
 
     return list(session.execute(stmt.limit(limit).offset(offset)).scalars())

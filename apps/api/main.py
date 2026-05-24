@@ -24,7 +24,26 @@ from apps.api.schemas import (
     SearchProfileResponse,
     NotificationChannelCreate,
     NotificationChannelResponse,
+    MatchStatusUpdate,
 )
+import re
+
+def extract_numeric_value(val_str: str | None) -> float | None:
+    if not val_str:
+        return None
+    # Strip spaces and keep digits, dots, commas
+    cleaned = "".join(c for c in val_str if c.isdigit() or c in ".,")
+    if not cleaned:
+        return None
+    if "," in cleaned:
+        if "." in cleaned:
+            cleaned = cleaned.replace(",", "")
+        else:
+            cleaned = cleaned.replace(",", ".")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -374,17 +393,269 @@ def tender(tender_id: int, session: Session = Depends(get_session)):
 
 @app.get("/api/matches", dependencies=[Depends(require_api_key)])
 def matches(
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    profile_id: int | None = Query(default=None),
+    status: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ):
     """Возвращает список совпадений тендеров с профилями поиска, отсортированный по уровню соответствия."""
-    items = list_matches(session, limit=limit, offset=offset)
+    items = list_matches(session, limit=limit, offset=offset, profile_id=profile_id, status=status)
 
     return {
         "items": [serialize_match(item) for item in items],
         "limit": limit,
         "offset": offset,
     }
+
+
+@app.put("/api/matches/{match_id}/status", dependencies=[Depends(require_api_key)])
+def update_match_status(
+    match_id: int,
+    data: MatchStatusUpdate,
+    session: Session = Depends(get_session),
+):
+    """Обновляет статус совпадения тендера (Канбан-доска)."""
+    match = session.query(TenderMatch).filter(TenderMatch.id == match_id).one_or_none()
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    valid_statuses = [status.value for status in MatchStatus]
+    if data.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+        )
+
+    match.status = data.status
+    session.commit()
+    session.refresh(match)
+    return serialize_match(match)
+
+
+@app.get("/api/analytics/competitors", dependencies=[Depends(require_api_key)])
+def get_competitor_analytics(session: Session = Depends(get_session)):
+    """Возвращает агрегированную аналитику по победителям, заказчикам и снижению цены."""
+    from belzakupki_db.models import TenderResult, Tender
+    from sqlalchemy import select, func
+
+    # 1. Top Winners
+    winner_stmt = (
+        select(
+            TenderResult.winner_name,
+            TenderResult.winner_unp,
+            func.count(TenderResult.id).label("wins_count"),
+            func.sum(TenderResult.contract_price).label("total_amount")
+        )
+        .where(TenderResult.winner_name != None)
+        .group_by(TenderResult.winner_name, TenderResult.winner_unp)
+        .order_by(func.count(TenderResult.id).desc())
+        .limit(10)
+    )
+    winners_res = session.execute(winner_stmt).all()
+    top_winners = [
+        {
+            "name": r.winner_name,
+            "unp": r.winner_unp,
+            "wins_count": r.wins_count,
+            "total_amount": float(r.total_amount) if r.total_amount is not None else 0.0,
+        }
+        for r in winners_res
+    ]
+
+    # 2. Top Customers
+    customer_stmt = (
+        select(
+            Tender.customer_name,
+            func.count(Tender.id).label("tenders_count"),
+            func.sum(TenderResult.contract_price).label("total_amount")
+        )
+        .outerjoin(TenderResult, Tender.id == TenderResult.tender_id)
+        .where(Tender.customer_name != None)
+        .group_by(Tender.customer_name)
+        .order_by(func.count(Tender.id).desc())
+        .limit(10)
+    )
+    customers_res = session.execute(customer_stmt).all()
+    top_customers = [
+        {
+            "name": r.customer_name,
+            "tenders_count": r.tenders_count,
+            "total_amount": float(r.total_amount) if r.total_amount is not None else 0.0,
+        }
+        for r in customers_res
+    ]
+
+    # 3. Average Price Reduction
+    stmt = (
+        select(TenderResult.contract_price, Tender.raw_data)
+        .join(Tender, Tender.id == TenderResult.tender_id)
+        .where(TenderResult.contract_price != None)
+    )
+    results = session.execute(stmt).all()
+
+    total_discount = 0.0
+    count = 0
+    percentages = []
+
+    for contract_price, raw_data in results:
+        if not raw_data:
+            continue
+        est_str = raw_data.get("estimated_value")
+        est_val = extract_numeric_value(est_str)
+        con_val = float(contract_price)
+
+        if est_val and est_val > 0 and con_val > 0 and est_val >= con_val:
+            discount = est_val - con_val
+            pct = (discount / est_val) * 100
+            percentages.append(pct)
+            total_discount += discount
+            count += 1
+
+    avg_discount_pct = sum(percentages) / len(percentages) if percentages else 0.0
+
+    return {
+        "top_winners": top_winners,
+        "top_customers": top_customers,
+        "metrics": {
+            "average_discount_percentage": round(avg_discount_pct, 2),
+            "total_discount_amount": round(total_discount, 2),
+            "analyzed_count": count
+        }
+    }
+
+
+@app.get("/api/reports/export/excel", dependencies=[Depends(require_api_key)])
+def export_excel(
+    profile_id: int | None = Query(None),
+    status: str | None = Query(None),
+    session: Session = Depends(get_session)
+):
+    """Генерирует Excel-отчет по совпавшим тендерам (с фильтрацией по профилю/статусу)."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from fastapi.responses import StreamingResponse
+    from datetime import datetime
+
+    items = list_matches(session, limit=5000, profile_id=profile_id, status=status)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Тендеры"
+
+    ws.views.sheetView[0].showGridLines = True
+
+    headers = [
+        "ID совпадения",
+        "ID тендера",
+        "Название тендера",
+        "Источник",
+        "Ссылка",
+        "Заказчик",
+        "Ориентировочная стоимость",
+        "Дата публикации",
+        "Дедлайн",
+        "Балл соответствия",
+        "Статус проработки",
+        "ИИ-Релевантность",
+        "ИИ-Анализ (DeepSeek)",
+        "Победитель закупки",
+        "Сумма договора"
+    ]
+
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1E1E24", end_color="1E1E24", fill_type="solid")
+    center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    right_align = Alignment(horizontal="right", vertical="center", wrap_text=True)
+
+    thin_side = Side(border_style="thin", color="CCCCCC")
+    border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    ws.append(headers)
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border_all
+
+    for item in items:
+        tender = item.tender
+        source_code = tender.source.code if tender.source else ""
+        result = tender.result
+
+        raw_data = tender.raw_data or {}
+        est_val = raw_data.get("estimated_value", "")
+        published_at_str = tender.published_at.strftime("%d.%m.%Y %H:%M") if tender.published_at else ""
+        deadline_at_str = tender.deadline_at.strftime("%d.%m.%Y %H:%M") if tender.deadline_at else ""
+
+        ai_rel = "Да" if item.ai_relevance else ("Нет" if item.ai_relevance is False else "Не проводился")
+        ai_summary = ""
+        if item.ai_analysis:
+            ai_summary = item.ai_analysis.get("relevance_explanation") or item.reason or ""
+
+        winner = result.winner_name if result else ""
+        price = ""
+        if result and result.contract_price is not None:
+            price = f"{result.contract_price} {result.currency or 'BYN'}"
+
+        row_data = [
+            item.id,
+            tender.id,
+            tender.title,
+            source_code,
+            tender.url,
+            tender.customer_name or "",
+            est_val,
+            published_at_str,
+            deadline_at_str,
+            float(item.score),
+            item.status,
+            ai_rel,
+            ai_summary,
+            winner,
+            price
+        ]
+
+        ws.append(row_data)
+        row_idx = ws.max_row
+
+        for col_idx in range(1, len(row_data) + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.border = border_all
+            cell.font = Font(name="Calibri", size=10)
+
+            if col_idx in [1, 2, 4, 8, 9, 10, 11, 12]:
+                cell.alignment = center_align
+            elif col_idx in [7, 15]:
+                cell.alignment = right_align
+            else:
+                cell.alignment = left_align
+
+    for col in ws.columns:
+        max_len = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            val_str = str(cell.value or "")
+            if len(val_str) > max_len:
+                max_len = min(len(val_str), 40)
+        ws.column_dimensions[col_letter].width = max(max_len + 3, 10)
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"tenders_report_{timestamp}.xlsx"
+
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
 
 

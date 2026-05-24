@@ -53,3 +53,7 @@ class NotificationChannelResponse(NotificationChannelBase):
 
     class Config:
         from_attributes = True
+
+
+class MatchStatusUpdate(BaseModel):
+    status: str

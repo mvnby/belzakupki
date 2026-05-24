@@ -29,6 +29,14 @@
                     <i class="fa-solid fa-list-check"></i>
                     <span>Тендеры</span>
                 </a>
+                <a href="#kanban" class="menu-item" data-tab="kanban">
+                    <i class="fa-solid fa-table-columns"></i>
+                    <span>Канбан</span>
+                </a>
+                <a href="#analytics" class="menu-item" data-tab="analytics">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>Аналитика</span>
+                </a>
                 <a href="#profiles" class="menu-item" data-tab="profiles">
                     <i class="fa-solid fa-gears"></i>
                     <span>Профили поиска</span>
@@ -170,6 +178,180 @@
                         <button class="btn btn-secondary" id="btn-prev-page" disabled><i class="fa-solid fa-chevron-left"></i> Назад</button>
                         <span id="page-indicator">Страница 1</span>
                         <button class="btn btn-secondary" id="btn-next-page">Вперед <i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Kanban Board View -->
+            <div class="content-view" id="view-kanban">
+                <!-- Kanban Filter Card -->
+                <div class="card filter-card" style="margin-bottom: 20px;">
+                    <div class="filter-bar" style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label for="kanban-profile-select" style="font-weight: 500; font-size: 14px; color: var(--text-secondary);">Профиль:</label>
+                            <select id="kanban-profile-select" class="form-select" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--text-primary); padding: 8px 12px; min-width: 250px; outline: none;">
+                                <!-- Will be loaded dynamically -->
+                            </select>
+                        </div>
+                        <div>
+                            <button class="btn btn-primary" id="btn-kanban-export"><i class="fa-solid fa-file-excel"></i> Экспорт в Excel</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Kanban Lanes -->
+                <div class="kanban-board">
+                    <!-- Lane 1: New / Processed -->
+                    <div class="kanban-lane" data-status="new_processed">
+                        <div class="lane-header">
+                            <h3>
+                                <span class="dot" style="background: #a78bfa;"></span>
+                                Входящие
+                            </h3>
+                            <span class="lane-count" id="count-lane-new_processed">0</span>
+                        </div>
+                        <div class="lane-cards" id="cards-lane-new_processed">
+                            <!-- Cards -->
+                        </div>
+                    </div>
+
+                    <!-- Lane 2: In Work -->
+                    <div class="kanban-lane" data-status="in_work">
+                        <div class="lane-header">
+                            <h3>
+                                <span class="dot" style="background: #6366f1;"></span>
+                                В работе
+                            </h3>
+                            <span class="lane-count" id="count-lane-in_work">0</span>
+                        </div>
+                        <div class="lane-cards" id="cards-lane-in_work">
+                            <!-- Cards -->
+                        </div>
+                    </div>
+
+                    <!-- Lane 3: Proposal Sent -->
+                    <div class="kanban-lane" data-status="proposal_sent">
+                        <div class="lane-header">
+                            <h3>
+                                <span class="dot" style="background: #fbbf24;"></span>
+                                КП отправлено
+                            </h3>
+                            <span class="lane-count" id="count-lane-proposal_sent">0</span>
+                        </div>
+                        <div class="lane-cards" id="cards-lane-proposal_sent">
+                            <!-- Cards -->
+                        </div>
+                    </div>
+
+                    <!-- Lane 4: Won -->
+                    <div class="kanban-lane" data-status="won">
+                        <div class="lane-header">
+                            <h3>
+                                <span class="dot" style="background: #10b981;"></span>
+                                Выигран
+                            </h3>
+                            <span class="lane-count" id="count-lane-won">0</span>
+                        </div>
+                        <div class="lane-cards" id="cards-lane-won">
+                            <!-- Cards -->
+                        </div>
+                    </div>
+
+                    <!-- Lane 5: Lost -->
+                    <div class="kanban-lane" data-status="lost">
+                        <div class="lane-header">
+                            <h3>
+                                <span class="dot" style="background: #ef4444;"></span>
+                                Проигран
+                            </h3>
+                            <span class="lane-count" id="count-lane-lost">0</span>
+                        </div>
+                        <div class="lane-cards" id="cards-lane-lost">
+                            <!-- Cards -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics Dashboard View -->
+            <div class="content-view" id="view-analytics">
+                <!-- Analytics Summary Cards -->
+                <div class="stats-grid" style="margin-bottom: 25px;">
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fa-solid fa-percent"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Снижение цены (Среднее)</span>
+                            <h3 class="stat-value" id="analytic-avg-discount">-</h3>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon purple"><i class="fa-solid fa-piggy-bank"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Сумма экономии (Всего)</span>
+                            <h3 class="stat-value" id="analytic-total-savings">-</h3>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon indigo"><i class="fa-solid fa-chart-pie"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-label">Проанализировано результатов</span>
+                            <h3 class="stat-value" id="analytic-total-analyzed">-</h3>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Leaderboards Grid -->
+                <div class="dashboard-details" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <!-- Competitor Leaderboard -->
+                    <div class="card details-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-trophy" style="color: #ffd700; margin-right: 8px;"></i> Топ Конкурентов (Победители)</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-wrapper">
+                                <table class="recent-matches-table" style="margin-top: 0;">
+                                    <thead>
+                                        <tr>
+                                            <th>Место</th>
+                                            <th>Конкурент (УНП)</th>
+                                            <th class="text-center">Побед</th>
+                                            <th class="text-right">Сумма договоров</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="competitors-leaderboard-body">
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted">Загрузка данных...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Customer Leaderboard -->
+                    <div class="card details-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-building" style="color: #6366f1; margin-right: 8px;"></i> Топ Заказчиков</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-wrapper">
+                                <table class="recent-matches-table" style="margin-top: 0;">
+                                    <thead>
+                                        <tr>
+                                            <th>Место</th>
+                                            <th>Заказчик</th>
+                                            <th class="text-center">Тендеров</th>
+                                            <th class="text-right">Сумма контрактов</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="customers-leaderboard-body">
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted">Загрузка данных...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

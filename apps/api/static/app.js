@@ -31,9 +31,19 @@ const REGION_NAMES = {
 const views = {
     overview: document.getElementById('view-overview'),
     tenders: document.getElementById('view-tenders'),
+    kanban: document.getElementById('view-kanban'),
+    analytics: document.getElementById('view-analytics'),
     profiles: document.getElementById('view-profiles'),
     actions: document.getElementById('view-actions')
 };
+
+const kanbanProfileSelect = document.getElementById('kanban-profile-select');
+const btnKanbanExport = document.getElementById('btn-kanban-export');
+const analyticAvgDiscount = document.getElementById('analytic-avg-discount');
+const analyticTotalSavings = document.getElementById('analytic-total-savings');
+const analyticTotalAnalyzed = document.getElementById('analytic-total-analyzed');
+const competitorsLeaderboardBody = document.getElementById('competitors-leaderboard-body');
+const customersLeaderboardBody = document.getElementById('customers-leaderboard-body');
 
 const menuItems = document.querySelectorAll('.menu-item');
 const pageTitle = document.getElementById('page-title');
@@ -114,6 +124,16 @@ function switchTab(tabId) {
             pageTitle.textContent = 'База тендеров';
             pageSubtitle.textContent = 'Список импортированных тендеров и релевантных совпадений';
             loadTendersData();
+            break;
+        case 'kanban':
+            pageTitle.textContent = 'Мои тендеры (Канбан)';
+            pageSubtitle.textContent = 'Управление воронкой проработки тендеров по выбранному профилю';
+            loadKanbanData();
+            break;
+        case 'analytics':
+            pageTitle.textContent = 'Аналитика рынка';
+            pageSubtitle.textContent = 'Анализ конкурентов, крупных заказчиков и среднего снижения цен';
+            loadAnalyticsData();
             break;
         case 'profiles':
             pageTitle.textContent = 'Профили поиска';
@@ -1033,6 +1053,293 @@ function setupEventListeners() {
         state.tendersPage++;
         loadTendersData();
     });
+
+    // Excel Exporter Button
+    const btnKanbanExport = document.getElementById('btn-kanban-export');
+    if (btnKanbanExport) {
+        btnKanbanExport.addEventListener('click', () => {
+            const profileId = kanbanProfileSelect.value;
+            if (!profileId) {
+                alert('Пожалуйста, выберите профиль для экспорта');
+                return;
+            }
+            window.location.href = `/api/reports/export/excel?profile_id=${profileId}`;
+        });
+    }
+}
+
+// --- View: Kanban Board ---
+async function loadKanbanData() {
+    if (state.profiles.length === 0) {
+        await loadProfilesData();
+    }
+    
+    if (kanbanProfileSelect.options.length === 0) {
+        kanbanProfileSelect.innerHTML = '';
+        state.profiles.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.name;
+            opt.style.background = '#1e1e24';
+            kanbanProfileSelect.appendChild(opt);
+        });
+        
+        kanbanProfileSelect.onchange = () => {
+            renderKanbanBoard(kanbanProfileSelect.value);
+        };
+    }
+    
+    if (kanbanProfileSelect.value) {
+        renderKanbanBoard(kanbanProfileSelect.value);
+    } else if (state.profiles.length > 0) {
+        kanbanProfileSelect.value = state.profiles[0].id;
+        renderKanbanBoard(state.profiles[0].id);
+    } else {
+        const lanes = ['new_processed', 'in_work', 'proposal_sent', 'won', 'lost'];
+        lanes.forEach(l => {
+            document.getElementById(`cards-lane-${l}`).innerHTML = '<div class="text-center text-muted" style="padding:20px;">Создайте хотя бы один профиль поиска.</div>';
+            document.getElementById(`count-lane-${l}`).textContent = '0';
+        });
+    }
+}
+
+async function renderKanbanBoard(profileId) {
+    const lanes = {
+        new_processed: document.getElementById('cards-lane-new_processed'),
+        in_work: document.getElementById('cards-lane-in_work'),
+        proposal_sent: document.getElementById('cards-lane-proposal_sent'),
+        won: document.getElementById('cards-lane-won'),
+        lost: document.getElementById('cards-lane-lost')
+    };
+    
+    const counts = {
+        new_processed: document.getElementById('count-lane-new_processed'),
+        in_work: document.getElementById('count-lane-in_work'),
+        proposal_sent: document.getElementById('count-lane-proposal_sent'),
+        won: document.getElementById('count-lane-won'),
+        lost: document.getElementById('count-lane-lost')
+    };
+    
+    Object.keys(lanes).forEach(k => {
+        lanes[k].innerHTML = '<div class="text-center text-muted" style="padding:20px;">Загрузка...</div>';
+        counts[k].textContent = '0';
+    });
+    
+    try {
+        const res = await fetch(`/api/matches?profile_id=${profileId}&limit=200`);
+        if (!res.ok) throw new Error('Ошибка при загрузке совпадений');
+        const data = await res.json();
+        
+        Object.keys(lanes).forEach(k => {
+            lanes[k].innerHTML = '';
+        });
+        
+        const laneLists = {
+            new_processed: [],
+            in_work: [],
+            proposal_sent: [],
+            won: [],
+            lost: []
+        };
+        
+        data.items.forEach(match => {
+            let laneName = match.status;
+            if (laneName === 'new' || laneName === 'processed' || laneName === 'accepted') {
+                laneName = 'new_processed';
+            }
+            if (laneLists[laneName]) {
+                laneLists[laneName].push(match);
+            } else {
+                laneLists.new_processed.push(match);
+            }
+        });
+        
+        Object.keys(lanes).forEach(laneKey => {
+            const laneItems = laneLists[laneKey];
+            counts[laneKey].textContent = laneItems.length;
+            
+            if (laneItems.length === 0) {
+                lanes[laneKey].innerHTML = '<div class="text-center text-muted" style="padding:20px; font-size:12px;">Пусто</div>';
+                return;
+            }
+            
+            laneItems.forEach(match => {
+                const card = document.createElement('div');
+                card.className = 'kanban-card';
+                card.setAttribute('draggable', 'true');
+                card.setAttribute('data-match-id', match.id);
+                
+                const scoreValue = match.score ? parseFloat(match.score).toFixed(0) : '0';
+                const sourceClass = match.tender.source ? `source-${match.tender.source}` : 'source-unknown';
+                const sourceCode = match.tender.source || 'UNK';
+                
+                let actionButtonsHTML = '';
+                if (laneKey !== 'new_processed') actionButtonsHTML += `<button onclick="event.stopPropagation(); moveMatchLane(${match.id}, 'processed')" title="В Входящие"><i class="fa-solid fa-arrow-left"></i></button>`;
+                if (laneKey !== 'in_work') actionButtonsHTML += `<button onclick="event.stopPropagation(); moveMatchLane(${match.id}, 'in_work')" title="В работу" style="color:#6366f1;"><i class="fa-solid fa-play"></i></button>`;
+                if (laneKey !== 'proposal_sent') actionButtonsHTML += `<button onclick="event.stopPropagation(); moveMatchLane(${match.id}, 'proposal_sent')" title="КП отправлено" style="color:#fbbf24;"><i class="fa-solid fa-paper-plane"></i></button>`;
+                if (laneKey !== 'won') actionButtonsHTML += `<button onclick="event.stopPropagation(); moveMatchLane(${match.id}, 'won')" title="Выигран" style="color:#10b981;"><i class="fa-solid fa-check"></i></button>`;
+                if (laneKey !== 'lost') actionButtonsHTML += `<button onclick="event.stopPropagation(); moveMatchLane(${match.id}, 'lost')" title="Проигран" style="color:#ef4444;"><i class="fa-solid fa-xmark"></i></button>`;
+                
+                card.innerHTML = `
+                    <div class="kanban-card-header">
+                        <span class="source-tag ${sourceClass}">${sourceCode}</span>
+                        <span class="badge" style="background: rgba(255,255,255,0.05); font-size: 11px;">Скор: ${scoreValue}</span>
+                    </div>
+                    <div class="kanban-card-title">${escapeHtml(match.tender.title)}</div>
+                    <div class="kanban-card-desc">${escapeHtml(match.tender.customer_name) || 'Заказчик не указан'}</div>
+                    <div class="kanban-card-meta">
+                        <div class="meta-date"><i class="fa-regular fa-clock"></i> ${formatDate(match.created_at).split(' ')[0]}</div>
+                    </div>
+                    <div class="kanban-card-footer">
+                        <div class="kanban-card-actions">
+                            ${actionButtonsHTML}
+                        </div>
+                    </div>
+                `;
+                
+                card.onclick = () => viewTenderDetails(match.tender.id);
+                
+                card.addEventListener('dragstart', (e) => {
+                    card.classList.add('dragging');
+                    e.dataTransfer.setData('text/plain', match.id);
+                });
+                
+                card.addEventListener('dragend', () => {
+                    card.classList.remove('dragging');
+                });
+                
+                lanes[laneKey].appendChild(card);
+            });
+        });
+        
+        setupDragAndDrop();
+        
+    } catch (err) {
+        Object.keys(lanes).forEach(k => {
+            lanes[k].innerHTML = `<div class="text-center text-muted" style="padding:20px; color:var(--color-danger);">${err.message}</div>`;
+        });
+    }
+}
+
+function setupDragAndDrop() {
+    const lanes = document.querySelectorAll('.kanban-lane');
+    lanes.forEach(lane => {
+        lane.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            lane.classList.add('drag-over');
+        });
+        
+        lane.addEventListener('dragleave', () => {
+            lane.classList.remove('drag-over');
+        });
+        
+        lane.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            lane.classList.remove('drag-over');
+            
+            const matchId = e.dataTransfer.getData('text/plain');
+            let targetStatus = lane.getAttribute('data-status');
+            
+            if (targetStatus === 'new_processed') {
+                targetStatus = 'processed';
+            }
+            
+            if (matchId && targetStatus) {
+                await updateMatchStatusInBackend(matchId, targetStatus);
+            }
+        });
+    });
+}
+
+async function moveMatchLane(matchId, status) {
+    await updateMatchStatusInBackend(matchId, status);
+}
+
+async function updateMatchStatusInBackend(matchId, status) {
+    try {
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ status: status })
+        });
+        
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || 'Не удалось обновить статус');
+        }
+        
+        if (kanbanProfileSelect.value) {
+            renderKanbanBoard(kanbanProfileSelect.value);
+        }
+    } catch (err) {
+        alert(`Ошибка при переносе тендера: ${err.message}`);
+    }
+}
+
+// --- View: Analytics ---
+async function loadAnalyticsData() {
+    analyticAvgDiscount.textContent = '...';
+    analyticTotalSavings.textContent = '...';
+    analyticTotalAnalyzed.textContent = '...';
+    competitorsLeaderboardBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Загрузка данных...</td></tr>';
+    customersLeaderboardBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Загрузка данных...</td></tr>';
+    
+    try {
+        const res = await fetch('/api/analytics/competitors');
+        if (!res.ok) throw new Error('Ошибка при загрузке аналитики');
+        const data = await res.json();
+        
+        analyticAvgDiscount.textContent = `${data.metrics.average_discount_percentage}%`;
+        analyticTotalSavings.textContent = `${data.metrics.total_discount_amount.toLocaleString('ru-RU')} BYN`;
+        analyticTotalAnalyzed.textContent = data.metrics.analyzed_count;
+        
+        competitorsLeaderboardBody.innerHTML = '';
+        if (data.top_winners.length === 0) {
+            competitorsLeaderboardBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Нет данных о победителях</td></tr>';
+        } else {
+            data.top_winners.forEach((w, index) => {
+                const tr = document.createElement('tr');
+                const rank = index + 1;
+                const rankClass = rank <= 3 ? `rank-${rank}` : 'rank-other';
+                
+                tr.innerHTML = `
+                    <td><span class="rank-badge ${rankClass}">${rank}</span></td>
+                    <td><strong>${escapeHtml(w.name)}</strong>${w.unp ? ` <span class="text-muted">(УНП: ${escapeHtml(w.unp)})</span>` : ''}</td>
+                    <td class="text-center"><span class="badge" style="background: rgba(255,255,255,0.05);">${w.wins_count}</span></td>
+                    <td class="text-right" style="font-weight: 600; color: #10b981;">${w.total_amount.toLocaleString('ru-RU')} BYN</td>
+                `;
+                competitorsLeaderboardBody.appendChild(tr);
+            });
+        }
+        
+        customersLeaderboardBody.innerHTML = '';
+        if (data.top_customers.length === 0) {
+            customersLeaderboardBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Нет данных о заказчиках</td></tr>';
+        } else {
+            data.top_customers.forEach((c, index) => {
+                const tr = document.createElement('tr');
+                const rank = index + 1;
+                const rankClass = rank <= 3 ? `rank-${rank}` : 'rank-other';
+                
+                tr.innerHTML = `
+                    <td><span class="rank-badge ${rankClass}">${rank}</span></td>
+                    <td><strong>${escapeHtml(c.name)}</strong></td>
+                    <td class="text-center"><span class="badge" style="background: rgba(255,255,255,0.05);">${c.tenders_count}</span></td>
+                    <td class="text-right" style="font-weight: 600; color: #6366f1;">${c.total_amount.toLocaleString('ru-RU')} BYN</td>
+                `;
+                customersLeaderboardBody.appendChild(tr);
+            });
+        }
+        
+    } catch (err) {
+        analyticAvgDiscount.textContent = 'Ошибка';
+        analyticTotalSavings.textContent = 'Ошибка';
+        analyticTotalAnalyzed.textContent = 'Ошибка';
+        competitorsLeaderboardBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted" style="color: var(--color-danger);">${err.message}</td></tr>`;
+        customersLeaderboardBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted" style="color: var(--color-danger);">${err.message}</td></tr>`;
+    }
 }
 
 // --- Initialization ---
@@ -1042,7 +1349,7 @@ async function init() {
     
     // Check initial hash route
     const hash = window.location.hash.substring(1);
-    if (['overview', 'tenders', 'profiles', 'actions'].includes(hash)) {
+    if (['overview', 'tenders', 'kanban', 'analytics', 'profiles', 'actions'].includes(hash)) {
         switchTab(hash);
     } else {
         switchTab('overview');

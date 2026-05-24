@@ -18,6 +18,10 @@ class MatchStatus(str, enum.Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    IN_WORK = "in_work"
+    PROPOSAL_SENT = "proposal_sent"
+    WON = "won"
+    LOST = "lost"
 
 
 class NotificationStatus(str, enum.Enum):
