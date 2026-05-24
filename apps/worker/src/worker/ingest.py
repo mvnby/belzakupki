@@ -25,7 +25,7 @@ from worker.sources.goszakupki_by import (
 
 
 SOURCE_CODE = "goszakupki_by"
-SOURCE_NAME = "Госзакупки Беларуси"
+SOURCE_NAME = "goszakupki.by"
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,10 @@ def get_or_create_source(session: Session, code: str, name: str, base_url: str) 
     ).scalar_one_or_none()
 
     if source is not None:
+        if source.name != name:
+            source.name = name
+            session.add(source)
+            session.flush()
         return source
 
     source = TenderSource(
@@ -279,7 +283,7 @@ def ingest_icetrade_tenders(
     source = get_or_create_source(
         session,
         "icetrade_by",
-        "ИС Тендеры (icetrade.by)",
+        "icetrade.by",
         ICETRADE_BASE_URL,
     )
 

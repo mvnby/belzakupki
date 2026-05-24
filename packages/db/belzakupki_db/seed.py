@@ -36,19 +36,23 @@ def seed_tender_sources(session: Session) -> None:
     if source is None:
         source = TenderSource(
             code="goszakupki_by",
-            name="Госзакупки Беларуси",
+            name="goszakupki.by",
             base_url="https://goszakupki.by",
         )
         session.add(source)
+    else:
+        source.name = "goszakupki.by"
 
     icetrade_source = session.query(TenderSource).filter_by(code="icetrade_by").one_or_none()
     if icetrade_source is None:
         icetrade_source = TenderSource(
             code="icetrade_by",
-            name="ИС Тендеры (icetrade.by)",
+            name="icetrade.by",
             base_url="https://icetrade.by",
         )
         session.add(icetrade_source)
+    else:
+        icetrade_source.name = "icetrade.by"
 
 
 def seed_search_profiles(session: Session) -> None:
