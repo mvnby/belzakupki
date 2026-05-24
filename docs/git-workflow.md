@@ -7,10 +7,9 @@ This document outlines the standard Git and development workflow for the **BelZa
 All development work should be done in dedicated branches branched off from the latest `main` or active sprint branch.
 
 - **Branch Naming Conventions**:
-  - `feature/name-of-feature` — for new features (e.g., `feature/excel-attachment-extractor`).
+  - `feature/name-of-feature` — for new features and sprint/task-specific work (e.g., `feature/excel-attachment-extractor`).
   - `bugfix/name-of-bug` — for fixing issues.
   - `refactor/what-changed` — for code restructuring without changing behavior.
-  - `codex/name-of-sprint-or-task` — for sprint-specific work (e.g., `codex/show-ingested-data`).
   - `docs/what-changed` — for updates to documentation.
 
 ## 2. Commit Message Standards

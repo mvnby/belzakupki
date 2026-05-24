@@ -23,45 +23,56 @@ except ImportError:
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
-METADATA_SYSTEM_PROMPT = """Ты — эксперт по анализу государственных закупок. Твоя задача — провести первичную экспресс-оценку релевантности тендера по его метаданным (название, заказчик, описание).
+def get_metadata_system_prompt(niche_description: str, keywords: list[str], negative_keywords: list[str]) -> str:
+    keywords_str = ", ".join(keywords)
+    neg_keywords_str = ", ".join(negative_keywords) if negative_keywords else "Нет"
+    return f"""Ты — эксперт по анализу государственных закупок. Твоя задача — провести первичную экспресс-оценку релевантности тендера по его метаданным (название, заказчик, описание).
 
-Мы занимаемся ТОЛЬКО системами отопления, вентиляции и кондиционирования воздуха (HVAC) для зданий, помещений, офисов, промышленных объектов (поставка, монтаж, обслуживание, ремонт бытовых, полупромышленных и промышленных сплит-систем, мульти-сплит, VRF/VRV систем, приточно-вытяжной вентиляции и т.д.).
+Мы занимаемся следующей деятельностью (наша ниша):
+{niche_description}
 
-КАТЕГОРИЧЕСКИ НЕПОДХОДЯЩИЕ тендеры:
-1. Кондиционирование транспорта: кондиционеры для тракторов, комбайнов, автобусов, поездов, вагонов метро, легковых и грузовых автомобилей, спецтехники.
-2. Охлаждение шкафов автоматики, телекоммуникационных или серверных стоек (если это не кондиционирование самого помещения серверной).
-3. Тендеры, не связанные с климатическим оборудованием (бытовая техника, общестроительные работы без вентиляции/кондиционирования).
+Ключевые слова, которые нас интересуют: {keywords_str}
+Исключения (минус-слова), которые нам КАТЕГОРИЧЕСКИ НЕ ПОДХОДЯТ: {neg_keywords_str}
 
 Правила оценки:
-- Если из названия, заказчика или описания ОДНОЗНАЧНО понятно, что тендер относится к неподходящим (например, "кондиционер для трактора", "автокондиционеры", "ремонт кондиционера тепловоза"), верни "relevant": false.
-- Если тендер относится к нашей теме (HVAC зданий) или информации в названии/описании недостаточно для однозначного отсечения (например, просто "поставка кондиционеров", "оказание услуг по ремонту кондиционеров"), верни "relevant": true (чтобы мы скачали документы и проверили их на втором этапе).
+1. Если из названия, заказчика или описания ОДНОЗНАЧНО понятно, что тендер относится к неподходящим или содержит минус-слова в нерелевантном контексте, верни "relevant": false.
+2. Если тендер относится к нашей нише или информации в названии/описании недостаточно для однозначного отсечения, верни "relevant": true (чтобы мы скачали документы и проверили их на втором этапе глубокого анализа).
 
 Ты ДОЛЖЕН вернуть JSON-объект (JSON Mode включен) со следующей структурой:
-{
+{{
   "relevant": true/false,
   "explanation": "Краткое объяснение на русском языке, почему тендер подходит или почему он отклонен (укажи конкретную причину)"
-}
+}}
 """
 
-SYSTEM_PROMPT = """You are an expert assistant analyzing public procurement tenders.
-Your task is to determine whether the provided tender documents match a search profile for HVAC (Heating, Ventilation, and Air Conditioning / кондиционирование, вентиляция, отопление).
-Specifically, we look for:
-- Supply, installation, maintenance, or repair of air conditioners, split systems, multi-split systems, VRF/VRV systems.
-- Design, installation, or maintenance of ventilation systems.
-- Do NOT classify general building renovation/repairs as relevant unless air conditioning/ventilation is a prominent, specific component of the work.
-- Exclude automotive or agricultural vehicle AC systems unless specifically requested (we exclude car/tractor AC by default).
+def get_deep_analysis_system_prompt(niche_description: str, keywords: list[str], negative_keywords: list[str]) -> str:
+    keywords_str = ", ".join(keywords)
+    neg_keywords_str = ", ".join(negative_keywords) if negative_keywords else "Нет"
+    return f"""You are an expert assistant analyzing public procurement tenders.
+Your task is to determine whether the provided tender documents match a search profile.
+
+Our business niche description:
+{niche_description}
+
+Keywords of interest: {keywords_str}
+Negative keywords to strictly exclude: {neg_keywords_str}
+
+Rules:
+1. Carefully read the provided document texts and determine if the core scope matches our business niche.
+2. If the tender is about a general service or unrelated work, and our niche is not a prominent, specific component of the work, classify it as "relevant": false.
+3. Check for negative keywords/exclusions and verify if they are present in a way that makes the tender irrelevant.
 
 You MUST return a JSON object (JSON Mode is enabled) with the following structure:
-{
+{{
   "relevant": true/false,
   "explanation": "Краткое объяснение на русском языке, почему тендер подходит или нет",
-  "commercial_proposal_info": {
-    "scope": "Краткое описание объема работ/поставки, количество кондиционеров, марки, технические требования (на русском)",
-    "requirements": "Требования к участникам (опыт, СРО, лицензии, сертификаты) (на русском)",
+  "commercial_proposal_info": {{
+    "scope": "Краткое описание объема работ/поставки, количество оборудования, марки, технические требования (на русском)",
+    "requirements": "Требования к участникам (опыт, СРО, лицензии, сертификаты, аттестаты) (на русском)",
     "budget_notes": "Сведения о бюджете, авансе, условиях оплаты и ценообразования из документов (на русском)",
     "suggested_actions": "Рекомендуемые действия для подготовки коммерческого предложения (на русском)"
-  }
-}
+  }}
+}}
 """
 
 def _do_deepseek_post(url: str, payload: dict, headers: dict, timeout: int) -> dict:
@@ -83,6 +94,9 @@ if _TENACITY_AVAILABLE:
 def analyze_relevance_by_metadata(
     title: str,
     customer: str,
+    niche_description: str,
+    keywords: list[str],
+    negative_keywords: list[str],
     description: str | None = None,
     api_key: str | None = None,
 ) -> dict[str, Any] | None:
@@ -99,10 +113,12 @@ def analyze_relevance_by_metadata(
         "Content-Type": "application/json",
     }
 
+    metadata_system_prompt = get_metadata_system_prompt(niche_description, keywords, negative_keywords)
+
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": METADATA_SYSTEM_PROMPT},
+            {"role": "system", "content": metadata_system_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.0,
@@ -125,6 +141,9 @@ def analyze_tender_relevance(
     title: str,
     customer: str,
     documents_text: str,
+    niche_description: str,
+    keywords: list[str],
+    negative_keywords: list[str],
     api_key: str | None = None,
 ) -> dict[str, Any] | None:
     token = api_key or os.getenv("DEEPSEEK_TOKEN")
@@ -145,10 +164,12 @@ def analyze_tender_relevance(
         "Content-Type": "application/json",
     }
 
+    deep_analysis_system_prompt = get_deep_analysis_system_prompt(niche_description, keywords, negative_keywords)
+
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": deep_analysis_system_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.0,

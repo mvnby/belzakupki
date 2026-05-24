@@ -17,6 +17,7 @@ from belzakupki_db.read import (
 from belzakupki_db.session import get_session
 from belzakupki_db.models import SearchProfile, NotificationChannel, Tender, TenderMatch, NotificationLog
 from belzakupki_db.enums import MatchStatus, NotificationStatus
+from belzakupki_db.presets import PRESETS
 from apps.api.schemas import (
     SearchProfileCreate,
     SearchProfileUpdate,
@@ -114,28 +115,37 @@ def run_notify_task():
 # --- Раздача Фронтенда ---
 
 @app.get("/", response_class=HTMLResponse)
-def read_dashboard():
+def read_dashboard(response: Response):
     """Раздает главную страницу панели управления (HTML)."""
     file_path = "apps/api/static/index.html"
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Frontend HTML file not found")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 @app.get("/style.css")
-def read_style():
+def read_style(response: Response):
     file_path = "apps/api/static/style.css"
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="style.css not found")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return FileResponse(file_path, media_type="text/css")
 
 
 @app.get("/app.js")
-def read_app_js():
+def read_app_js(response: Response):
     file_path = "apps/api/static/app.js"
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="app.js not found")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return FileResponse(file_path, media_type="application/javascript")
 
 
@@ -186,12 +196,20 @@ def get_profiles(
     )
 
 
+@app.get("/api/presets", dependencies=[Depends(require_api_key)])
+def get_presets():
+    """Возвращает список всех доступных пресетов с их дефолтными настройками."""
+    return list(PRESETS.values())
+
+
 @app.post("/api/profiles", response_model=SearchProfileResponse, dependencies=[Depends(require_api_key)])
 def create_profile(data: SearchProfileCreate, session: Session = Depends(get_session)):
     """Создает новый поисковый профиль."""
     profile = SearchProfile(
         name=data.name,
         description=data.description,
+        preset_code=data.preset_code,
+        niche_description=data.niche_description,
         keywords=data.keywords,
         negative_keywords=data.negative_keywords,
         regions=data.regions,
@@ -217,6 +235,10 @@ def update_profile(profile_id: int, data: SearchProfileUpdate, session: Session 
         profile.name = data.name
     if data.description is not None:
         profile.description = data.description
+    if data.preset_code is not None:
+        profile.preset_code = data.preset_code
+    if data.niche_description is not None:
+        profile.niche_description = data.niche_description
     if data.keywords is not None:
         profile.keywords = data.keywords
     if data.negative_keywords is not None:

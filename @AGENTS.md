@@ -16,11 +16,10 @@ BelZakupki is a Belarus procurement monitoring service that collects tenders, fi
 
 1. **Follow the Git Workflow**: Refer to the repository guidelines in [git-workflow.md](file:///Users/maksimkorotov/Documents/belzakupki/docs/git-workflow.md) before making commits or branching.
    - **Branch Naming Conventions**:
-     - `feature/name-of-feature` — for new features.
+     - `feature/name-of-feature` — for new features and task/sprint-specific work.
      - `bugfix/name-of-bug` — for fixing issues.
      - `refactor/what-changed` — for code restructuring without changing behavior.
      - `docs/what-changed` — for updates to documentation.
-     - `codex/name-of-task` — for task/sprint-specific work (e.g., `codex/show-ingested-data`).
 2. **Preserve Integrity**: Do not remove existing comments, docstrings, or tests unless explicitly requested.
 3. **Lazy Loading**: When introducing external libraries, use lazy loading/imports if they are optional (e.g., see [morphology.py](file:///Users/maksimkorotov/Documents/belzakupki/apps/worker/src/worker/morphology.py) and [text_extractor.py](file:///Users/maksimkorotov/Documents/belzakupki/apps/worker/src/worker/analyzer/text_extractor.py) for reference).
 4. **Error Handling & Rollbacks**: Ensure database sessions are safely rolled back on exceptions (refer to [session.py](file:///Users/maksimkorotov/Documents/belzakupki/packages/db/belzakupki_db/session.py)).

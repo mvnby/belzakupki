@@ -9,6 +9,7 @@ const state = {
     tendersFilterMatched: false,
     tendersSearch: '',
     profiles: [],
+    presets: [], // List of dynamic presets fetched from API
     editingProfile: null, // Holds profile object when editing, or null for new profile
     editingKeywords: [],
     editingNegativeKeywords: [],
@@ -59,6 +60,16 @@ function formatDate(dateStr) {
     } catch {
         return dateStr;
     }
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function logToConsole(message, type = 'info') {
@@ -118,6 +129,22 @@ function switchTab(tabId) {
 }
 
 // --- API Calls ---
+
+async function fetchPresets() {
+    try {
+        const res = await fetch('/api/presets');
+        const presets = await res.json();
+        state.presets = presets;
+        
+        // Populate select element in the modal
+        const select = document.getElementById('form-profile-preset');
+        if (select) {
+            select.innerHTML = presets.map(p => `<option value="${p.code}" style="background: #1e1e24;">${p.name}</option>`).join('');
+        }
+    } catch (err) {
+        console.error('Error fetching presets:', err);
+    }
+}
 
 async function fetchStats() {
     try {
@@ -565,6 +592,45 @@ async function viewTenderDetails(tenderId) {
             attContainer.style.display = 'none';
         }
 
+        // Render contacts and terms
+        const contacts = tender.contacts || {};
+        const hasContacts = !!(contacts.name || contacts.phone || contacts.email);
+        const hasTerms = !!(tender.delivery_terms || tender.payment_terms);
+
+        if (hasContacts || hasTerms) {
+            document.getElementById('modal-tender-details-enriched').style.display = 'block';
+            document.getElementById('modal-enriched-contact-name').textContent = contacts.name || 'Не указано';
+            document.getElementById('modal-enriched-contact-phone').textContent = contacts.phone || 'Не указан';
+            document.getElementById('modal-enriched-contact-email').textContent = contacts.email || 'Не указан';
+            document.getElementById('modal-enriched-delivery-terms').textContent = tender.delivery_terms || 'Не указаны';
+            document.getElementById('modal-enriched-payment-terms').textContent = tender.payment_terms || 'Не указаны';
+        } else {
+            document.getElementById('modal-tender-details-enriched').style.display = 'none';
+        }
+
+        // Render lots
+        const lots = tender.lots || [];
+        const lotsContainer = document.getElementById('modal-tender-lots-container');
+        const lotsBody = document.getElementById('modal-tender-lots-body');
+        lotsBody.innerHTML = '';
+
+        if (lots && lots.length > 0) {
+            lotsContainer.style.display = 'block';
+            lots.forEach(lot => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(lot.number) || '-'}</td>
+                    <td>${escapeHtml(lot.name) || '-'}</td>
+                    <td>${escapeHtml(lot.quantity) || '-'}</td>
+                    <td>${escapeHtml(lot.okrb) || '-'}</td>
+                    <td>${escapeHtml(lot.estimated_value) || '-'}</td>
+                `;
+                lotsBody.appendChild(tr);
+            });
+        } else {
+            lotsContainer.style.display = 'none';
+        }
+
         // Render formatted JSON
         document.getElementById('modal-tender-json').textContent = JSON.stringify(tender, null, 2);
 
@@ -587,6 +653,19 @@ function openCreateProfileModal() {
     document.getElementById('form-profile-id').value = '';
     document.getElementById('form-profile-name').value = '';
     document.getElementById('form-profile-description').value = '';
+    
+    // Default to HVAC preset
+    const defaultPreset = state.presets.find(p => p.code === 'hvac') || state.presets[0];
+    if (defaultPreset) {
+        document.getElementById('form-profile-preset').value = defaultPreset.code;
+        document.getElementById('form-profile-niche-description').value = defaultPreset.description || '';
+        state.editingKeywords = [...defaultPreset.default_keywords];
+        state.editingNegativeKeywords = [...defaultPreset.default_negative_keywords];
+    } else {
+        document.getElementById('form-profile-preset').value = 'custom';
+        document.getElementById('form-profile-niche-description').value = '';
+    }
+    
     document.getElementById('form-profile-active').checked = true;
     document.getElementById('form-channel-active').checked = true;
     document.getElementById('form-telegram-chat').value = '';
@@ -615,6 +694,8 @@ async function openEditProfileModal(profileId) {
     document.getElementById('form-profile-id').value = profile.id;
     document.getElementById('form-profile-name').value = profile.name;
     document.getElementById('form-profile-description').value = profile.description || '';
+    document.getElementById('form-profile-preset').value = profile.preset_code || 'custom';
+    document.getElementById('form-profile-niche-description').value = profile.niche_description || '';
     document.getElementById('form-profile-active').checked = profile.is_active;
     document.getElementById('form-profile-min-score').value = profile.min_score || 0;
     document.getElementById('form-profile-schedule').value = profile.schedule_interval || 'manual';
@@ -704,6 +785,9 @@ async function saveProfile() {
         return;
     }
 
+    const preset_code = document.getElementById('form-profile-preset').value;
+    const niche_description = document.getElementById('form-profile-niche-description').value.trim();
+
     const selectedRegions = Array.from(document.querySelectorAll('input[name="form-profile-region"]:checked')).map(cb => cb.value);
     const minScore = parseFloat(document.getElementById('form-profile-min-score').value) || 0;
     const scheduleInterval = document.getElementById('form-profile-schedule').value;
@@ -711,6 +795,8 @@ async function saveProfile() {
     const payload = {
         name,
         description: description || null,
+        preset_code: preset_code || null,
+        niche_description: niche_description || null,
         keywords: state.editingKeywords,
         negative_keywords: state.editingNegativeKeywords,
         regions: selectedRegions,
@@ -823,6 +909,23 @@ function setupEventListeners() {
     document.getElementById('btn-create-profile').addEventListener('click', openCreateProfileModal);
     document.getElementById('btn-save-profile').addEventListener('click', saveProfile);
 
+    // Preset selection change listener
+    const selectPreset = document.getElementById('form-profile-preset');
+    if (selectPreset) {
+        selectPreset.addEventListener('change', (e) => {
+            const presetCode = e.target.value;
+            const preset = state.presets.find(p => p.code === presetCode);
+            if (!preset) return;
+            
+            document.getElementById('form-profile-niche-description').value = preset.description || '';
+            state.editingKeywords = [...preset.default_keywords];
+            state.editingNegativeKeywords = [...preset.default_negative_keywords];
+            
+            renderTags('keywords');
+            renderTags('negative');
+        });
+    }
+
     // Tags pill input events
     const inputKeyword = document.getElementById('input-keyword-tag');
     inputKeyword.addEventListener('keydown', (e) => {
@@ -882,8 +985,9 @@ function setupEventListeners() {
 }
 
 // --- Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
+async function init() {
     setupEventListeners();
+    await fetchPresets();
     
     // Check initial hash route
     const hash = window.location.hash.substring(1);
@@ -892,4 +996,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         switchTab('overview');
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}

@@ -61,6 +61,10 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
         "created_at": _isoformat(tender.created_at),
         "updated_at": _isoformat(tender.updated_at),
         "attachments": raw_data.get("attachments") or [],
+        "contacts": raw_data.get("contacts"),
+        "delivery_terms": raw_data.get("delivery_terms"),
+        "payment_terms": raw_data.get("payment_terms"),
+        "lots": raw_data.get("lots") or [],
         "ai_relevance": ai_relevance,
         "ai_analysis": ai_analysis,
     }

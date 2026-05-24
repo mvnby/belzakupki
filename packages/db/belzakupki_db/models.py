@@ -104,6 +104,8 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preset_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    niche_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     keywords: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     negative_keywords: Mapped[list[str]] = mapped_column(
