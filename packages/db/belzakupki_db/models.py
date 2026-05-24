@@ -22,6 +22,10 @@ from belzakupki_db.base import Base, ReprMixin, TimestampMixin
 
 
 class TenderSource(Base, TimestampMixin, ReprMixin):
+    """Источник тендеров (например, госзакупки или icetrade).
+
+    Хранит информацию о сайтах-первоисточниках, с которых собираются тендеры.
+    """
     __tablename__ = "tender_sources"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -37,6 +41,11 @@ class TenderSource(Base, TimestampMixin, ReprMixin):
 
 
 class Tender(Base, TimestampMixin, ReprMixin):
+    """Тендер (закупка), импортированный из внешнего источника.
+
+    Содержит сырые метаданные тендера (извлеченные из HTML) и ссылку на источник.
+    Связан с совпадениями TenderMatch (один тендер может подходить под несколько профилей).
+    """
     __tablename__ = "tenders"
     __table_args__ = (
         UniqueConstraint(
@@ -85,6 +94,11 @@ class Tender(Base, TimestampMixin, ReprMixin):
 
 
 class SearchProfile(Base, TimestampMixin, ReprMixin):
+    """Профиль поиска тендеров.
+
+    Содержит настройки фильтрации: ключевые слова, минус-слова,
+    регионы, категории, а также настройки планировщика автозапуска.
+    """
     __tablename__ = "search_profiles"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -124,6 +138,12 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
 
 
 class TenderMatch(Base, TimestampMixin, ReprMixin):
+    """Совпадение тендера с поисковым профилем.
+
+    Создается на этапе скоринга, если тендер набрал балл больше min_score в профиле.
+    Хранит оценку релевантности (score), причину совпадения (matched_keywords),
+    а также результаты детального ИИ-анализа (ai_relevance, ai_analysis).
+    """
     __tablename__ = "tender_matches"
     __table_args__ = (
         UniqueConstraint(
@@ -171,6 +191,11 @@ class TenderMatch(Base, TimestampMixin, ReprMixin):
 
 
 class NotificationChannel(Base, TimestampMixin, ReprMixin):
+    """Канал уведомлений для конкретного профиля поиска.
+
+    Примеры каналов: Telegram-чат (содержит bot_token/chat_id в JSON config).
+    Уведомления отправляются, когда для профиля появляется новое совпадение TenderMatch.
+    """
     __tablename__ = "notification_channels"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -195,6 +220,12 @@ class NotificationChannel(Base, TimestampMixin, ReprMixin):
 
 
 class NotificationLog(Base, ReprMixin):
+    """Журнал отправки уведомлений.
+
+    Служит для фиксации факта и статуса отправки уведомления о конкретном совпадении
+    (match_id) по конкретному каналу уведомлений (channel_id).
+    Предотвращает повторную отправку одного и того же тендера в тот же канал.
+    """
     __tablename__ = "notification_logs"
     __table_args__ = (
         UniqueConstraint(

@@ -24,6 +24,10 @@ def _decimal_to_float(value: Decimal | None) -> float | None:
 
 
 def serialize_tender(tender: Tender) -> dict[str, Any]:
+    """Преобразует объект модели Tender в словарь для API-ответа.
+
+    Включает в себя информацию об источнике, дедлайнах и результатах ИИ-анализа (если есть).
+    """
     raw_data = tender.raw_data or {}
 
     ai_relevance = None
@@ -64,6 +68,10 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
 
 
 def serialize_match(match: TenderMatch) -> dict[str, Any]:
+    """Преобразует объект совпадения TenderMatch в словарь для API-ответа.
+
+    Включает информацию о профиле поиска, ключевых словах, скоринге, ИИ-анализе и самом тендере.
+    """
     return {
         "id": match.id,
         "score": _decimal_to_float(match.score),
@@ -90,6 +98,11 @@ def list_tenders(
     matched_only: bool = False,
     query: str | None = None,
 ) -> list[Tender]:
+    """Возвращает список тендеров с сортировкой по дате создания (убывание).
+
+    Поддерживает пагинацию (limit, offset), фильтрацию только совпавших тендеров (matched_only)
+    и поиск по текстовой строке в названии, заказчике или внешнем ID (query).
+    """
     stmt: Select[tuple[Tender]] = (
         select(Tender)
         .options(joinedload(Tender.source))
@@ -113,6 +126,7 @@ def list_tenders(
 
 
 def get_tender(session: Session, tender_id: int) -> Tender | None:
+    """Возвращает один тендер по его ID с предзагрузкой связей (источник, совпадения)."""
     return session.execute(
         select(Tender)
         .options(
@@ -131,6 +145,10 @@ def list_matches(
     limit: int = 20,
     offset: int = 0,
 ) -> list[TenderMatch]:
+    """Возвращает список совпадений тендеров, отсортированных по баллу релевантности (убывание).
+
+    Используется для вывода в панель управления. Eager-loads профиль и тендер с его источником.
+    """
     stmt = (
         select(TenderMatch)
         .options(
