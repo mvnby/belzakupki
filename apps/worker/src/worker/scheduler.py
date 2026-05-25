@@ -62,6 +62,8 @@ def _run_profile(profile_id: int) -> None:
             from worker.ingest import (
                 ingest_goszakupki_tenders,
                 ingest_icetrade_tenders,
+                ingest_butb_tenders,
+                ingest_gias_tenders,
                 run_ai_analysis_for_new_matches,
             )
             from worker.notifications import dispatch_notifications
@@ -84,12 +86,16 @@ def _run_profile(profile_id: int) -> None:
                 )
                 ingest_goszakupki_tenders(session, profiles=[profile], limit=20)
                 ingest_icetrade_tenders(session, profiles=[profile], limit=20)
+                ingest_butb_tenders(session, profiles=[profile], limit=20)
+                ingest_gias_tenders(session, profiles=[profile], limit=20)
                 session.commit()
 
                 # 2. AI analysis
                 logger.info("Scheduler: running AI analysis for new matches")
                 run_ai_analysis_for_new_matches(session, "goszakupki_by")
                 run_ai_analysis_for_new_matches(session, "icetrade_by")
+                run_ai_analysis_for_new_matches(session, "butb_by")
+                run_ai_analysis_for_new_matches(session, "gias_by")
                 session.commit()
 
                 # 3. Notifications

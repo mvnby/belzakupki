@@ -105,6 +105,17 @@ def parse_deadline_string(deadline_str: str | None) -> datetime | None:
         return None
 
 
+def make_json_serializable(d: Any) -> Any:
+    """Helper to convert datetimes to ISO format strings for JSON serialization."""
+    if isinstance(d, dict):
+        return {k: make_json_serializable(v) for k, v in d.items()}
+    elif isinstance(d, list):
+        return [make_json_serializable(x) for x in d]
+    elif isinstance(d, datetime):
+        return d.isoformat()
+    return d
+
+
 def upsert_tender(
     session: Session,
     source: TenderSource,
@@ -116,7 +127,12 @@ def upsert_tender(
     """
     external_id = str(item["external_id"])
     item_hash = content_hash(item)
-    deadline_dt = parse_deadline_string(item.get("deadline"))
+    
+    deadline_dt = item.get("deadline_at")
+    if not deadline_dt:
+        deadline_dt = parse_deadline_string(item.get("deadline"))
+        
+    published_dt = item.get("published_at")
 
     tender = session.execute(
         select(Tender).where(
@@ -133,9 +149,10 @@ def upsert_tender(
             customer_name=item.get("customer_name"),
             url=item["url"],
             status=item.get("status", "posted"),
-            raw_data=item,
+            raw_data=make_json_serializable(item),
             content_hash=item_hash,
             deadline_at=deadline_dt,
+            published_at=published_dt,
         )
         session.add(tender)
         session.flush()
@@ -146,9 +163,10 @@ def upsert_tender(
     tender.customer_name = item.get("customer_name")
     tender.url = item["url"]
     tender.status = item.get("status", tender.status)
-    tender.raw_data = item
+    tender.raw_data = make_json_serializable(item)
     tender.content_hash = item_hash
     tender.deadline_at = deadline_dt
+    tender.published_at = published_dt
 
     return tender, False
 
@@ -359,6 +377,114 @@ def ingest_icetrade_tenders(
     )
 
 
+def ingest_butb_tenders(
+    session: Session,
+    *,
+    profiles: list[SearchProfile] | None = None,
+    limit: int | None = None,
+    commit: bool = True,
+) -> IngestStats:
+    """Сбор тендеров с БУТБ (zakupki.butb.by)."""
+    from worker.sources.butb_by import (
+        BASE_URL as BUTB_BASE_URL,
+        fetch_tenders as fetch_butb,
+        fetch_tenders_for_profiles as fetch_butb_dynamic,
+    )
+
+    source = get_or_create_source(
+        session,
+        "butb_by",
+        "butb.by",
+        BUTB_BASE_URL,
+    )
+
+    if profiles is not None:
+        items = fetch_butb_dynamic(profiles, limit=limit)
+    else:
+        items = fetch_butb(limit=limit)
+
+    created = 0
+    updated = 0
+    matches = 0
+
+    for item in items:
+        tender, was_created = upsert_tender(session, source, item)
+
+        if was_created:
+            created += 1
+        else:
+            updated += 1
+
+        matches_count = score_tender(session, tender)
+        matches += matches_count
+
+    run_ai_analysis_for_new_matches(session, "butb_by")
+
+    if commit:
+        session.commit()
+
+    return IngestStats(
+        fetched=len(items),
+        created=created,
+        updated=updated,
+        matches=matches,
+    )
+
+
+def ingest_gias_tenders(
+    session: Session,
+    *,
+    profiles: list[SearchProfile] | None = None,
+    limit: int | None = None,
+    commit: bool = True,
+) -> IngestStats:
+    """Сбор тендеров с ГИАС (gias.by)."""
+    from worker.sources.gias_by import (
+        BASE_URL as GIAS_BASE_URL,
+        fetch_tenders as fetch_gias,
+        fetch_tenders_for_profiles as fetch_gias_dynamic,
+    )
+
+    source = get_or_create_source(
+        session,
+        "gias_by",
+        "gias.by",
+        GIAS_BASE_URL,
+    )
+
+    if profiles is not None:
+        items = fetch_gias_dynamic(profiles, limit=limit)
+    else:
+        items = fetch_gias(limit=limit)
+
+    created = 0
+    updated = 0
+    matches = 0
+
+    for item in items:
+        tender, was_created = upsert_tender(session, source, item)
+
+        if was_created:
+            created += 1
+        else:
+            updated += 1
+
+        matches_count = score_tender(session, tender)
+        matches += matches_count
+
+    run_ai_analysis_for_new_matches(session, "gias_by")
+
+    if commit:
+        session.commit()
+
+    return IngestStats(
+        fetched=len(items),
+        created=created,
+        updated=updated,
+        matches=matches,
+    )
+
+
 def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
     """Запускает двухэтапную ИИ-проверку релевантности тендеров через DeepSeek API.
 
@@ -403,6 +529,8 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         from worker.sources.goszakupki_by import fetch_tender_attachments
     elif source_code == "icetrade_by":
         from worker.sources.icetrade_by import fetch_tender_attachments
+    elif source_code in ("butb_by", "gias_by"):
+        fetch_tender_attachments = lambda url: []
     else:
         logger.error(f"Unknown source code: {source_code}")
         return
