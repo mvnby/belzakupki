@@ -58,6 +58,7 @@ def test_map_gias_tender_with_detail():
     detail = {
         "purchaseGiasId": "test-uuid",
         "title": "Detailed Title",
+        "publicPurchaseNumber": "4536937",
         "tenderForm": 2,  # электронный аукцион
         "region": 7,  # г. Минск (maps to canonical 5)
         "dtCreate": 1779458632652,
@@ -69,16 +70,54 @@ def test_map_gias_tender_with_detail():
         "organizator": {
             "name": "МинскОрг",
             "location": "Минск"
-        }
+        },
+        "links": [
+            {
+                "link": "https://zakupki.butb.by/file.docx",
+                "name": "file.docx",
+                "description": "техническое задание"
+            }
+        ],
+        "lots": [
+            {
+                "lotNumber": 1,
+                "titleLot": "автоматический гематологический анализатор",
+                "volume": 1.0,
+                "unit": {
+                    "name": "Штука"
+                },
+                "price": 37625.25,
+                "deliveryLot": "Витебск",
+                "codeOKPB": ["26.51.53.830"],
+                "financeSource": [
+                    {
+                        "budgetCost": 37625.25
+                    }
+                ]
+            }
+        ]
     }
     
     mapped = map_gias_tender(item, detail)
     assert mapped["external_id"] == "test-uuid"
+    assert mapped["source_number"] == "4536937"
     assert mapped["title"] == "Detailed Title"
     assert mapped["procedure_type"] == "электронный аукцион"
     assert mapped["region"] == "5"
     assert mapped["estimated_value"] == 120000.5
     assert mapped["currency"] == "BYN"
+    assert mapped["funding_source"] == "Бюджетные средства"
+    assert mapped["delivery_terms"] == "Витебск"
+    assert mapped["payment_terms"] == "см. документацию"
+    assert len(mapped["attachments"]) == 1
+    assert mapped["attachments"][0]["name"] == "file.docx"
+    assert mapped["attachments"][0]["url"] == "https://zakupki.butb.by/file.docx"
+    assert len(mapped["lots"]) == 1
+    assert mapped["lots"][0]["number"] == "1"
+    assert mapped["lots"][0]["name"] == "автоматический гематологический анализатор"
+    assert mapped["lots"][0]["quantity"] == "1.0 Штука"
+    assert mapped["lots"][0]["estimated_value"] == 37625.25
+    assert mapped["lots"][0]["okrb"] == "26.51.53.830"
 
 
 @patch("httpx.Client")

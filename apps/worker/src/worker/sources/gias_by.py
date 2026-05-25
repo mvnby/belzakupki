@@ -67,7 +67,65 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
     
     tender_form = d.get("tenderForm")
     procedure_type = GIAS_PROCEDURE_TYPES.get(tender_form, "Не указана")
-    funding_source = "Не указан"
+    
+    # 1. Map source_number
+    source_number = d.get("publicPurchaseNumber") or item.get("publicPurchaseNumber")
+    
+    # 2. Map attachments
+    attachments = []
+    for link in d.get("links", []):
+        if link.get("link"):
+            attachments.append({
+                "name": link.get("name") or link.get("description") or "Документ",
+                "url": link.get("link")
+            })
+            
+    # 3. Map lots
+    lots = []
+    for lot in d.get("lots", []):
+        unit_name = lot.get("unit", {}).get("name") if lot.get("unit") else ""
+        volume = lot.get("volume")
+        qty_str = f"{volume} {unit_name}".strip() if volume is not None else unit_name
+        
+        okrb_list = lot.get("codeOKPB") or []
+        okrb_str = ", ".join(str(o) for o in okrb_list)
+        
+        lots.append({
+            "number": str(lot.get("lotNumber") or ""),
+            "name": lot.get("titleLot"),
+            "quantity": qty_str,
+            "estimated_value": lot.get("price"),
+            "okrb": okrb_str
+        })
+        
+    # 4. Map contacts
+    contacts = None
+    contact_org = d.get("contactOrganizer")
+    if contact_org:
+        if isinstance(contact_org, dict):
+            contacts = {
+                "name": contact_org.get("name") or contact_org.get("fullName") or "",
+                "phone": contact_org.get("phone") or contact_org.get("telephone") or "",
+                "email": contact_org.get("email") or ""
+            }
+        else:
+            contacts = {"name": str(contact_org), "phone": "", "email": ""}
+            
+    # 5. Map delivery terms
+    deliveries = set(lot.get("deliveryLot") for lot in d.get("lots", []) if lot.get("deliveryLot"))
+    delivery_terms = ", ".join(sorted(list(deliveries))) if deliveries else None
+    
+    # 6. Map payment terms and funding source
+    funding_sources = set()
+    for lot in d.get("lots", []):
+        for fs in lot.get("financeSource", []):
+            if fs.get("budgetCost", 0) > 0:
+                funding_sources.add("Бюджетные средства")
+            if fs.get("fundCost", 0) > 0 or fs.get("innerCost", 0) > 0:
+                funding_sources.add("Собственные/Внебюджетные средства")
+    funding_source = " + ".join(sorted(list(funding_sources))) if funding_sources else "Не указан"
+    
+    payment_terms = "см. документацию" if attachments else None
     
     sum_lot_obj = d.get("sumLot") or item.get("sumLot") or {}
     estimated_value = sum_lot_obj.get("sumLot")
@@ -110,6 +168,7 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
         
     return {
         "external_id": external_id,
+        "source_number": source_number,
         "title": title,
         "customer_name": customer_name,
         "url": url,
@@ -121,6 +180,11 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
         "published_at": published_at,
         "deadline_at": deadline_at,
         "region": region,
+        "attachments": attachments,
+        "contacts": contacts,
+        "delivery_terms": delivery_terms,
+        "payment_terms": payment_terms,
+        "lots": lots,
         "raw_data": d
     }
 
