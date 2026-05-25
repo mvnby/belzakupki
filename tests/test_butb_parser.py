@@ -10,6 +10,9 @@ from worker.sources.butb_by import (
     extract_region,
     parse_tenders_html,
     fetch_tenders_for_profiles,
+    parse_tender_details_html,
+    fetch_tender_details,
+    fetch_tender_attachments,
 )
 
 def test_parse_date():
@@ -117,3 +120,112 @@ def test_fetch_tenders_for_profiles(mock_fetch):
     matched = fetch_tenders_for_profiles([profile])
     assert len(matched) == 1
     assert matched[0]["external_id"] == "PR20260522377862"
+
+
+def test_parse_tender_details_html():
+    mock_html = """
+    <div class="grid">
+        <div>Регистрационный номер:</div>
+        <div>PR20260522377862</div>
+        <div>Вид закупки:</div>
+        <div>государственная (бюджет)</div>
+        <div>Состояние:</div>
+        <div>Подача предложений</div>
+        <div>Полное наименование:</div>
+        <div>Республиканское унитарное предприятие</div>
+        <div>Телефон:</div>
+        <div>+375232 35 67 14</div>
+        <div>E-mail:</div>
+        <div>203@mdt.by</div>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>№ лота</th>
+                <th>Код ОКРБ</th>
+                <th>Предмет закупки</th>
+                <th>Количество (объем)</th>
+                <th>Место поставки</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td>32.50.13.650</td>
+                <td>Краник трехходовой запорный</td>
+                <td>127 500 шт.</td>
+                <td>г. Гомель, ул. Чонгарской дивизии 14</td>
+            </tr>
+        </tbody>
+    </table>
+    <table>
+        <thead>
+            <tr>
+                <th>Наименование документа</th>
+                <th>Имя файла</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Запрос цены</td>
+                <td><a href="/auctions/download?id=5782804;jsessionid=abc?download=1">pr_purchase.pdf</a></td>
+            </tr>
+        </tbody>
+    </table>
+    """
+    
+    details = parse_tender_details_html(mock_html)
+    assert details["source_number"] == "PR20260522377862"
+    assert details["procedure_type"] == "государственная (бюджет)"
+    assert details["status"] == "Подача предложений"
+    assert details["customer_name"] == "Республиканское унитарное предприятие"
+    assert details["contacts"] == {
+        "name": "",
+        "phone": "+375232 35 67 14",
+        "email": "203@mdt.by"
+    }
+    assert details["delivery_terms"] == "г. Гомель, ул. Чонгарской дивизии 14"
+    assert details["payment_terms"] == "см. документацию"
+    assert details["funding_source"] == "Бюджетные средства"
+    assert len(details["attachments"]) == 1
+    assert details["attachments"][0] == {
+        "name": "Запрос цены",
+        "url": "https://zakupki.butb.by/auctions/download?id=5782804&download=1"
+    }
+    assert len(details["lots"]) == 1
+    assert details["lots"][0] == {
+        "number": "1",
+        "okrb": "32.50.13.650",
+        "name": "Краник трехходовой запорный",
+        "quantity": "127 500 шт.",
+        "estimated_value": ""
+    }
+
+
+@patch("worker.sources.butb_by.httpx.Client")
+def test_fetch_tender_details(mock_client_class):
+    mock_client = MagicMock()
+    mock_client_class.return_value.__enter__.return_value = mock_client
+    
+    mock_response_main = MagicMock()
+    mock_response_main.status_code = 200
+    
+    mock_response_detail = MagicMock()
+    mock_response_detail.status_code = 200
+    mock_response_detail.text = "<div class='grid'><div>Регистрационный номер:</div><div>PR123</div></div>"
+    
+    mock_client.get.side_effect = [mock_response_main, mock_response_detail]
+    
+    details = fetch_tender_details("https://zakupki.butb.by/auctions/viewinvitation.html?auction=PR123")
+    assert details["source_number"] == "PR123"
+
+
+@patch("worker.sources.butb_by.fetch_tender_details")
+def test_fetch_tender_attachments(mock_fetch):
+    mock_fetch.return_value = {
+        "attachments": [{"name": "doc1.pdf", "url": "http://link"}]
+    }
+    attachments = fetch_tender_attachments("http://url")
+    assert len(attachments) == 1
+    assert attachments[0]["name"] == "doc1.pdf"
+

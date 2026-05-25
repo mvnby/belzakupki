@@ -243,6 +243,8 @@ def enrich_tender_if_needed(
                 from worker.sources.goszakupki_by import fetch_tender_details
             elif source_code == "icetrade_by":
                 from worker.sources.icetrade_by import fetch_tender_details
+            elif source_code == "butb_by":
+                from worker.sources.butb_by import fetch_tender_details
             else:
                 return
 
@@ -417,6 +419,7 @@ def ingest_butb_tenders(
 
         matches_count = score_tender(session, tender)
         matches += matches_count
+        enrich_tender_if_needed(session, tender, was_created, matches_count, "butb_by")
 
     run_ai_analysis_for_new_matches(session, "butb_by")
 
@@ -529,7 +532,9 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         from worker.sources.goszakupki_by import fetch_tender_attachments
     elif source_code == "icetrade_by":
         from worker.sources.icetrade_by import fetch_tender_attachments
-    elif source_code in ("butb_by", "gias_by"):
+    elif source_code == "butb_by":
+        from worker.sources.butb_by import fetch_tender_attachments
+    elif source_code == "gias_by":
         fetch_tender_attachments = lambda url: []
     else:
         logger.error(f"Unknown source code: {source_code}")
@@ -608,6 +613,10 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                             from worker.sources.goszakupki_by import build_headers, should_verify_ssl
                             verify = should_verify_ssl()
                             headers = build_headers()
+                        elif source_code == "butb_by":
+                            from worker.sources.butb_by import should_verify_ssl, USER_AGENT
+                            verify = should_verify_ssl()
+                            headers = {"User-Agent": USER_AGENT}
                         else:
                             from worker.sources.icetrade_by import build_headers, should_verify_ssl
                             verify = should_verify_ssl()
@@ -616,6 +625,8 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                         with httpx.Client(follow_redirects=True, headers=headers, verify=verify, timeout=20) as client:
                             if source_code == "goszakupki_by":
                                 client.get("https://goszakupki.by")
+                            elif source_code == "butb_by":
+                                client.get("https://zakupki.butb.by/")
                             
                             MAX_SIZE_LIMIT = 15 * 1024 * 1024
                             with client.stream("GET", file_url) as r:
