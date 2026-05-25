@@ -82,6 +82,7 @@ def test_parse_tenders_html():
     assert t0["external_id"] == "PR20260522377862"
     assert t0["title"] == "Поставка кондиционеров и сплит-систем"
     assert t0["procedure_type"] == "запрос ценовых предложений"
+    assert t0["url"] == "https://zakupki.butb.by/auctions/viewinvitation.html?auction=PR20260522377862"
     assert t0["estimated_value"] == 66978.12
     assert t0["currency"] == "BYN"
     assert t0["region"] == "2"
@@ -89,6 +90,7 @@ def test_parse_tenders_html():
 
     t1 = tenders[1]
     assert t1["external_id"] == "AU20260522377863"
+    assert t1["url"] == "https://zakupki.butb.by/auctions/viewinvitation.html?auction=AU20260522377863"
     assert t1["region"] == "4"
 
 @patch("worker.sources.butb_by.fetch_tenders")

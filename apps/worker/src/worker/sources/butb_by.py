@@ -143,7 +143,7 @@ def parse_tenders_html(html: str) -> list[dict]:
         deadline_dt = parse_date(deadline_str)
         region = extract_region(customer)
         
-        tender_url = f"{REGISTRY_URL}#{external_id}"
+        tender_url = f"{BASE_URL}/auctions/viewinvitation.html?auction={external_id}"
         
         tenders.append({
             "external_id": external_id,
