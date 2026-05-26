@@ -33,6 +33,7 @@ class SearchProfileUpdate(BaseModel):
 
 class SearchProfileResponse(SearchProfileBase):
     id: int
+    tenant_id: Optional[int] = None
     last_run_at: Optional[datetime] = None
 
     class Config:
@@ -57,3 +58,78 @@ class NotificationChannelResponse(NotificationChannelBase):
 
 class MatchStatusUpdate(BaseModel):
     status: str
+
+
+class TenantResponse(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class UserCreate(BaseModel):
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=6, max_length=64)
+    full_name: Optional[str] = Field(None, max_length=255)
+    tenant_name: Optional[str] = Field(None, max_length=255)
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    tenant_id: int
+    email: str
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class CrmConfigBase(BaseModel):
+    crm_type: str = Field(..., max_length=64)
+    is_active: bool = True
+    webhook_url: Optional[str] = Field(None, max_length=500)
+    subdomain: Optional[str] = Field(None, max_length=255)
+    api_token: Optional[str] = None
+    custom_mappings: Optional[Dict[str, Any]] = None
+
+
+class CrmConfigCreate(CrmConfigBase):
+    pass
+
+
+class CrmConfigResponse(CrmConfigBase):
+    id: int
+    tenant_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class ChatMessageCreate(BaseModel):
+    message: str = Field(..., min_length=1)
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    role: str
+    message: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+

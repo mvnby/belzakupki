@@ -73,8 +73,8 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
     
     # 2. Map attachments
     attachments = []
-    for link in d.get("links", []):
-        if link.get("link"):
+    for link in (d.get("links") or []):
+        if link and link.get("link"):
             attachments.append({
                 "name": link.get("name") or link.get("description") or "Документ",
                 "url": link.get("link")
@@ -82,7 +82,7 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
             
     # 3. Map lots
     lots = []
-    for lot in d.get("lots", []):
+    for lot in (d.get("lots") or []):
         unit_name = lot.get("unit", {}).get("name") if lot.get("unit") else ""
         volume = lot.get("volume")
         qty_str = f"{volume} {unit_name}".strip() if volume is not None else unit_name
@@ -112,16 +112,16 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
             contacts = {"name": str(contact_org), "phone": "", "email": ""}
             
     # 5. Map delivery terms
-    deliveries = set(lot.get("deliveryLot") for lot in d.get("lots", []) if lot.get("deliveryLot"))
+    deliveries = set(lot.get("deliveryLot") for lot in (d.get("lots") or []) if lot and lot.get("deliveryLot"))
     delivery_terms = ", ".join(sorted(list(deliveries))) if deliveries else None
     
     # 6. Map payment terms and funding source
     funding_sources = set()
-    for lot in d.get("lots", []):
-        for fs in lot.get("financeSource", []):
-            if fs.get("budgetCost", 0) > 0:
+    for lot in (d.get("lots") or []):
+        for fs in (lot.get("financeSource") or []):
+            if fs and fs.get("budgetCost", 0) > 0:
                 funding_sources.add("Бюджетные средства")
-            if fs.get("fundCost", 0) > 0 or fs.get("innerCost", 0) > 0:
+            if fs and (fs.get("fundCost", 0) > 0 or fs.get("innerCost", 0) > 0):
                 funding_sources.add("Собственные/Внебюджетные средства")
     funding_source = " + ".join(sorted(list(funding_sources))) if funding_sources else "Не указан"
     

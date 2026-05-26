@@ -88,8 +88,11 @@ def build_search_params(search: GoszakupkiSearch | None) -> list[tuple[str, str]
     return params
 
 
-def build_search_url(search: GoszakupkiSearch | None) -> str:
+def build_search_url(search: GoszakupkiSearch | None, page: int | None = None) -> str:
     params = build_search_params(search)
+
+    if page and page > 1:
+        params.append(("page", str(page)))
 
     if not params:
         return URL
@@ -166,6 +169,10 @@ def fetch_tenders(
     verify_ssl: bool | None = None,
 ) -> list[dict]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    tenders: list[dict] = []
+    seen_external_ids: set[str] = set()
+
+    pages_to_fetch = 1 if search is not None else 3
 
     with httpx.Client(
         follow_redirects=True,
@@ -174,15 +181,32 @@ def fetch_tenders(
         verify=verify,
     ) as client:
         client.get(BASE_URL).raise_for_status()
-        response = client.get(build_search_url(search))
-        response.raise_for_status()
 
-        if response.url.path == "/site/login":
-            raise RuntimeError(
-                "goszakupki.by redirected to login after session warm-up"
-            )
+        for page in range(1, pages_to_fetch + 1):
+            remaining = None if limit is None else limit - len(tenders)
+            if remaining is not None and remaining <= 0:
+                break
 
-        return parse_tenders_html(response.text, limit=limit, search=search)
+            response = client.get(build_search_url(search, page=page))
+            response.raise_for_status()
+
+            if response.url.path == "/site/login":
+                raise RuntimeError(
+                    "goszakupki.by redirected to login after session warm-up"
+                )
+
+            items = parse_tenders_html(response.text, limit=remaining, search=search)
+            if not items:
+                break
+
+            for item in items:
+                external_id = item["external_id"]
+                if external_id in seen_external_ids:
+                    continue
+                seen_external_ids.add(external_id)
+                tenders.append(item)
+
+    return tenders
 
 
 def fetch_tenders_for_searches(

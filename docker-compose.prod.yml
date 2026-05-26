@@ -1,0 +1,80 @@
+services:
+  api:
+    build: .
+    restart: always
+    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      REDIS_URL: redis://redis:6379/0
+      GOSZAKUPKI_VERIFY_SSL: "${GOSZAKUPKI_VERIFY_SSL:-false}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+      DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    restart: always
+    command: python apps/worker/main.py
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      REDIS_URL: redis://redis:6379/0
+      GOSZAKUPKI_VERIFY_SSL: "${GOSZAKUPKI_VERIFY_SSL:-false}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+      DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: belzakupki
+      POSTGRES_PASSWORD: belzakupki
+      POSTGRES_DB: belzakupki
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U belzakupki -d belzakupki"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h localhost ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    command: caddy reverse-proxy --from maxikor.fun --to api:8000
+    depends_on:
+      - api
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:

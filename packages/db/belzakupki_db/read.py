@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from belzakupki_db.models import Tender, TenderMatch
+from belzakupki_db.models import Tender, TenderMatch, SearchProfile
 
 
 def _isoformat(value: Any) -> str | None:
@@ -23,7 +23,7 @@ def _decimal_to_float(value: Decimal | None) -> float | None:
     return float(value)
 
 
-def serialize_tender(tender: Tender) -> dict[str, Any]:
+def serialize_tender(tender: Tender, tenant_id: int | None = None) -> dict[str, Any]:
     """Преобразует объект модели Tender в словарь для API-ответа.
 
     Включает в себя информацию об источнике, дедлайнах и результатах ИИ-анализа (если есть).
@@ -34,6 +34,8 @@ def serialize_tender(tender: Tender) -> dict[str, Any]:
     ai_analysis = None
     if tender.matches:
         for match in tender.matches:
+            if tenant_id is not None and match.profile.tenant_id != tenant_id:
+                continue
             if match.ai_analysis is not None:
                 ai_relevance = match.ai_relevance
                 ai_analysis = match.ai_analysis
@@ -102,7 +104,8 @@ def serialize_match(match: TenderMatch) -> dict[str, Any]:
         },
         "ai_relevance": match.ai_relevance,
         "ai_analysis": match.ai_analysis,
-        "tender": serialize_tender(match.tender),
+        "crm_deal_id": match.crm_deal_id,
+        "tender": serialize_tender(match.tender, tenant_id=match.profile.tenant_id),
         "created_at": _isoformat(match.created_at),
         "updated_at": _isoformat(match.updated_at),
     }
@@ -168,6 +171,7 @@ def list_matches(
     offset: int = 0,
     profile_id: int | None = None,
     status: str | None = None,
+    tenant_id: int | None = None,
 ) -> list[TenderMatch]:
     """Возвращает список совпадений тендеров, отсортированных по баллу релевантности (убывание).
 
@@ -181,6 +185,9 @@ def list_matches(
             joinedload(TenderMatch.tender).joinedload(Tender.result),
         )
     )
+
+    if tenant_id is not None:
+        stmt = stmt.join(TenderMatch.profile).where(SearchProfile.tenant_id == tenant_id)
 
     if profile_id is not None:
         stmt = stmt.where(TenderMatch.profile_id == profile_id)

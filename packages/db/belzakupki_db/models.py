@@ -85,6 +85,7 @@ class Tender(Base, TimestampMixin, ReprMixin):
 
     raw_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    is_matched_checked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     source: Mapped[TenderSource] = relationship(back_populates="tenders")
     matches: Mapped[list["TenderMatch"]] = relationship(
@@ -96,6 +97,52 @@ class Tender(Base, TimestampMixin, ReprMixin):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    documents: Mapped[list["TenderDocument"]] = relationship(
+        back_populates="tender",
+        cascade="all, delete-orphan",
+    )
+
+class Tenant(Base, TimestampMixin, ReprMixin):
+    """Организация (арендатор/клиент) в SaaS системе."""
+    __tablename__ = "tenants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    users: Mapped[list["User"]] = relationship(
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+    search_profiles: Mapped[list["SearchProfile"]] = relationship(
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+    crm_configs: Mapped[list["CrmConfig"]] = relationship(
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+
+
+class User(Base, TimestampMixin, ReprMixin):
+    """Пользователь конкретной организации (Tenant)."""
+    __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_email", "email"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(64), nullable=False, default="manager")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="users")
 
 
 class SearchProfile(Base, TimestampMixin, ReprMixin):
@@ -107,6 +154,10 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
     __tablename__ = "search_profiles"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     preset_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -134,6 +185,7 @@ class SearchProfile(Base, TimestampMixin, ReprMixin):
         nullable=True,
     )
 
+    tenant: Mapped[Tenant | None] = relationship(back_populates="search_profiles")
     matches: Mapped[list["TenderMatch"]] = relationship(
         back_populates="profile",
         cascade="all, delete-orphan",
@@ -188,10 +240,15 @@ class TenderMatch(Base, TimestampMixin, ReprMixin):
 
     ai_relevance: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     ai_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    crm_deal_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     tender: Mapped[Tender] = relationship(back_populates="matches")
     profile: Mapped[SearchProfile] = relationship(back_populates="matches")
     notification_logs: Mapped[list["NotificationLog"]] = relationship(
+        back_populates="match",
+        cascade="all, delete-orphan",
+    )
+    chat_histories: Mapped[list["TenderChatHistory"]] = relationship(
         back_populates="match",
         cascade="all, delete-orphan",
     )
@@ -290,3 +347,82 @@ class TenderResult(Base, TimestampMixin, ReprMixin):
     raw_result_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     tender: Mapped[Tender] = relationship(back_populates="result")
+
+
+class CrmConfig(Base, TimestampMixin, ReprMixin):
+    """Настройки интеграции с CRM для конкретной организации (Tenant)."""
+    __tablename__ = "crm_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "crm_type",
+            name="uq_crm_configs_tenant_id_crm_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    crm_type: Mapped[str] = mapped_column(String(64), nullable=False) # 'bitrix24' or 'amocrm'
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    
+    # Bitrix24 settings
+    webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    
+    # amoCRM settings
+    subdomain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    api_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Custom field mappings
+    custom_mappings: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="crm_configs")
+
+
+class TenderDocument(Base, TimestampMixin, ReprMixin):
+    """Текстовое содержимое документов/вложений тендера."""
+    __tablename__ = "tender_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "tender_id",
+            "file_name",
+            name="uq_tender_documents_tender_id_file_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tender_id: Mapped[int] = mapped_column(
+        ForeignKey("tenders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    tender: Mapped[Tender] = relationship(back_populates="documents")
+
+
+class TenderChatHistory(Base, ReprMixin):
+    """История чата (QA по ТЗ) пользователя с ИИ-ассистентом по конкретному совпадению."""
+    __tablename__ = "tender_chat_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("tender_matches.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False) # 'user' or 'assistant'
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    match: Mapped[TenderMatch] = relationship(back_populates="chat_histories")
+    user: Mapped[User] = relationship()

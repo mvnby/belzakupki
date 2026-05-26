@@ -152,8 +152,10 @@ def build_search_params(search: IcetradeSearch | None) -> list[tuple[str, str]]:
     return params
 
 
-def build_search_url(search: IcetradeSearch | None) -> str:
+def build_search_url(search: IcetradeSearch | None, page: int | None = None) -> str:
     params = build_search_params(search)
+    if page and page > 1:
+        params.append(("p", str(page)))
     return f"{URL}?{urlencode(params)}"
 
 
@@ -230,10 +232,30 @@ def fetch_tenders(
     verify_ssl: bool | None = None,
 ) -> list[dict]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    tenders: list[dict] = []
+    seen_external_ids: set[str] = set()
+
+    pages_to_fetch = 1 if search is not None else 3
 
     with _create_client(verify) as client:
-        response = _execute_request(client, "GET", build_search_url(search))
-        return parse_tenders_html(response.text, limit=limit, search=search)
+        for page in range(1, pages_to_fetch + 1):
+            remaining = None if limit is None else limit - len(tenders)
+            if remaining is not None and remaining <= 0:
+                break
+
+            response = _execute_request(client, "GET", build_search_url(search, page=page))
+            items = parse_tenders_html(response.text, limit=remaining, search=search)
+            if not items:
+                break
+
+            for item in items:
+                external_id = item["external_id"]
+                if external_id in seen_external_ids:
+                    continue
+                seen_external_ids.add(external_id)
+                tenders.append(item)
+
+    return tenders
 
 
 def fetch_tenders_for_searches(

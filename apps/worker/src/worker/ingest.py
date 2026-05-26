@@ -297,11 +297,13 @@ def ingest_goszakupki_tenders(
         else:
             updated += 1
 
-        matches_count = score_tender(session, tender)
-        matches += matches_count
-        enrich_tender_if_needed(session, tender, was_created, matches_count, SOURCE_CODE)
+        if profiles is not None:
+            matches_count = score_tender(session, tender)
+            matches += matches_count
+            enrich_tender_if_needed(session, tender, was_created, matches_count, SOURCE_CODE)
 
-    run_ai_analysis_for_new_matches(session, SOURCE_CODE)
+    if profiles is not None:
+        run_ai_analysis_for_new_matches(session, SOURCE_CODE)
 
     if commit:
         session.commit()
@@ -362,11 +364,13 @@ def ingest_icetrade_tenders(
         else:
             updated += 1
 
-        matches_count = score_tender(session, tender)
-        matches += matches_count
-        enrich_tender_if_needed(session, tender, was_created, matches_count, "icetrade_by")
+        if profiles is not None:
+            matches_count = score_tender(session, tender)
+            matches += matches_count
+            enrich_tender_if_needed(session, tender, was_created, matches_count, "icetrade_by")
 
-    run_ai_analysis_for_new_matches(session, "icetrade_by")
+    if profiles is not None:
+        run_ai_analysis_for_new_matches(session, "icetrade_by")
 
     if commit:
         session.commit()
@@ -417,11 +421,13 @@ def ingest_butb_tenders(
         else:
             updated += 1
 
-        matches_count = score_tender(session, tender)
-        matches += matches_count
-        enrich_tender_if_needed(session, tender, was_created, matches_count, "butb_by")
+        if profiles is not None:
+            matches_count = score_tender(session, tender)
+            matches += matches_count
+            enrich_tender_if_needed(session, tender, was_created, matches_count, "butb_by")
 
-    run_ai_analysis_for_new_matches(session, "butb_by")
+    if profiles is not None:
+        run_ai_analysis_for_new_matches(session, "butb_by")
 
     if commit:
         session.commit()
@@ -472,10 +478,12 @@ def ingest_gias_tenders(
         else:
             updated += 1
 
-        matches_count = score_tender(session, tender)
-        matches += matches_count
+        if profiles is not None:
+            matches_count = score_tender(session, tender)
+            matches += matches_count
 
-    run_ai_analysis_for_new_matches(session, "gias_by")
+    if profiles is not None:
+        run_ai_analysis_for_new_matches(session, "gias_by")
 
     if commit:
         session.commit()
@@ -646,6 +654,23 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                         file_text = extract_text_from_file(local_path)
                         if file_text:
                             text_parts.append(f"--- File: {file_name} ---\n{file_text}")
+                            
+                            from belzakupki_db.models import TenderDocument
+                            # Save to TenderDocument, update if already exists
+                            doc = session.query(TenderDocument).filter(
+                                TenderDocument.tender_id == tender.id,
+                                TenderDocument.file_name == file_name
+                            ).first()
+                            if doc:
+                                doc.content = file_text
+                            else:
+                                doc = TenderDocument(
+                                    tender_id=tender.id,
+                                    file_name=file_name,
+                                    content=file_text
+                                )
+                                session.add(doc)
+                            session.flush()
                     except Exception as e:
                         logger.warning(f"Failed to download/extract file {file_name}: {e}")
                     finally:

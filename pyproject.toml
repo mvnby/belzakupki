@@ -23,6 +23,7 @@ dependencies = [
   "loguru",
   "pypdf",
   "python-docx",
+  "pyjwt",
   # Sprint 3: quality & robustness
   "pymorphy3",     # Russian morphological analysis for keyword scoring
   "tenacity",      # Retry with exponential backoff for DeepSeek API calls
