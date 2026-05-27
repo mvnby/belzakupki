@@ -199,8 +199,8 @@ def list_matches(
             stmt = stmt.where(TenderMatch.status == status)
 
     stmt = stmt.order_by(
-        TenderMatch.score.desc(),
         TenderMatch.created_at.desc(),
+        TenderMatch.score.desc(),
         TenderMatch.id.desc(),
     )
 
