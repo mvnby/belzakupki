@@ -389,6 +389,19 @@ def create_profile(
     session: Session = Depends(get_session),
 ):
     """Создает новый поисковый профиль."""
+    if data.is_active:
+        from belzakupki_db.billing import PLAN_LIMITS
+        limits = PLAN_LIMITS.get(current_tenant.plan, PLAN_LIMITS["free"])
+        active_count = session.query(SearchProfile).filter(
+            SearchProfile.tenant_id == current_tenant.id,
+            SearchProfile.is_active.is_(True)
+        ).count()
+        if active_count >= limits["max_active_profiles"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Превышен лимит активных профилей для тарифа '{current_tenant.plan}' (максимум: {limits['max_active_profiles']})"
+            )
+
     profile = SearchProfile(
         tenant_id=current_tenant.id,
         name=data.name,
@@ -424,6 +437,20 @@ def update_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found or access denied")
     
+    if data.is_active is True and not profile.is_active:
+        from belzakupki_db.billing import PLAN_LIMITS
+        limits = PLAN_LIMITS.get(current_tenant.plan, PLAN_LIMITS["free"])
+        active_count = session.query(SearchProfile).filter(
+            SearchProfile.tenant_id == current_tenant.id,
+            SearchProfile.is_active.is_(True),
+            SearchProfile.id != profile.id
+        ).count()
+        if active_count >= limits["max_active_profiles"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Превышен лимит активных профилей для тарифа '{current_tenant.plan}' (максимум: {limits['max_active_profiles']})"
+            )
+
     if data.name is not None:
         profile.name = data.name
     if data.description is not None:
@@ -471,6 +498,36 @@ def delete_profile(
     return {"status": "deleted"}
 
 
+@app.get("/api/billing/status")
+def get_billing_status(
+    current_tenant: Tenant = Depends(get_current_tenant),
+    session: Session = Depends(get_session),
+):
+    """Возвращает информацию о текущем тарифе, сроке действия подписки, кредитах и лимитах."""
+    from belzakupki_db.billing import PLAN_LIMITS, check_and_reset_billing_cycle
+    
+    check_and_reset_billing_cycle(session, current_tenant)
+    session.commit()
+    
+    limits = PLAN_LIMITS.get(current_tenant.plan, PLAN_LIMITS["free"])
+    
+    active_profiles_count = session.query(SearchProfile).filter(
+        SearchProfile.tenant_id == current_tenant.id,
+        SearchProfile.is_active.is_(True)
+    ).count()
+    
+    return {
+        "plan": current_tenant.plan,
+        "subscription_expires_at": current_tenant.subscription_expires_at.isoformat() if current_tenant.subscription_expires_at else None,
+        "ai_credits_used": current_tenant.ai_credits_used,
+        "ai_credits_limit": limits["max_ai_credits"],
+        "max_active_profiles": limits["max_active_profiles"],
+        "active_profiles_count": active_profiles_count,
+        "max_channels_per_profile": limits["max_channels_per_profile"],
+        "billing_cycle_started_at": current_tenant.billing_cycle_started_at.isoformat(),
+    }
+
+
 # --- Управление каналами уведомлений (Notification Channels) ---
 
 @app.get("/api/profiles/{profile_id}/channels", response_model=list[NotificationChannelResponse])
@@ -510,6 +567,24 @@ def create_or_update_channel(
         NotificationChannel.profile_id == profile_id,
         NotificationChannel.type == data.type
     ).first()
+    
+    if data.is_active:
+        from belzakupki_db.billing import PLAN_LIMITS
+        limits = PLAN_LIMITS.get(current_tenant.plan, PLAN_LIMITS["free"])
+        
+        active_channels_query = session.query(NotificationChannel).filter(
+            NotificationChannel.profile_id == profile_id,
+            NotificationChannel.is_active.is_(True)
+        )
+        if channel:
+            active_channels_query = active_channels_query.filter(NotificationChannel.id != channel.id)
+            
+        active_channels_count = active_channels_query.count()
+        if active_channels_count >= limits["max_channels_per_profile"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Превышен лимит активных каналов уведомлений на профиль для тарифа '{current_tenant.plan}' (максимум: {limits['max_channels_per_profile']})"
+            )
     
     if channel:
         channel.name = data.name

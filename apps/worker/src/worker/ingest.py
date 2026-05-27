@@ -605,6 +605,22 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         keywords = profile.keywords or []
         negative_keywords = profile.negative_keywords or []
 
+        tenant_id = profile.tenant_id
+        if tenant_id:
+            from belzakupki_db.billing import can_use_ai_credits
+            if not can_use_ai_credits(session, tenant_id):
+                logger.info(f"AI credits exhausted or subscription expired for tenant {tenant_id}. Bypassing DeepSeek AI analysis for match {match.id}.")
+                match.ai_relevance = True
+                match.ai_analysis = {
+                    "relevant": True,
+                    "explanation": "Анализ пропущен по лимиту тарифа (морфологический скоринг сохранен)",
+                    "bypassed": True,
+                    "limit_exceeded": True
+                }
+                session.add(match)
+                session.flush()
+                continue
+
         try:
             # Stage 1: Metadata-based relevance check
             metadata_analysis = analyze_relevance_by_metadata(
@@ -632,6 +648,9 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                 match.status = MatchStatus.REJECTED_BY_AI
                 session.add(match)
                 session.flush()
+                if tenant_id:
+                    from belzakupki_db.billing import increment_ai_credits
+                    increment_ai_credits(session, tenant_id)
                 continue
 
             # Stage 2: Deep check with documents
@@ -742,6 +761,9 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                     match.status = MatchStatus.REJECTED_BY_AI
                 else:
                     logger.info(f"Tender {tender.id} approved by AI. Keeping status 'new'.")
+                if tenant_id:
+                    from belzakupki_db.billing import increment_ai_credits
+                    increment_ai_credits(session, tenant_id)
             else:
                 logger.warning(f"DeepSeek analysis returned None for match {match.id}")
 
