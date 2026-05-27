@@ -171,15 +171,53 @@ def upsert_tender(
     return tender, False
 
 
+def extract_tender_region(tender: Tender) -> str | None:
+    """Определяет канонический код региона для тендера.
+    
+    Сначала проверяет поле region в raw_data, затем пробует извлечь 
+    из названия заказчика, наименования или описания закупки.
+    """
+    if tender.raw_data and isinstance(tender.raw_data, dict):
+        reg = tender.raw_data.get("region")
+        if reg:
+            return str(reg)
+            
+    text = " ".join(
+        val
+        for val in (tender.customer_name, tender.title, tender.description)
+        if val
+    ).lower()
+    
+    if not text:
+        return None
+        
+    if "брест" in text:
+        return "1"
+    if "витеб" in text:
+        return "2"
+    if "гоме" in text:
+        return "3"
+    if "гродн" in text:
+        return "4"
+    if "могил" in text or "могилев" in text or "могилёв" in text:
+        return "7"
+    if "минс" in text or "белфармация" in text or "белмедтехника" in text or "белжелдорснаб" in text:
+        if "област" in text or "областн" in text or "район" in text:
+            return "6"
+        return "5"
+        
+    return None
+
+
 def score_tender(session: Session, tender: Tender) -> int:
     """Проводит морфологический скоринг текста тендера по всем активным профилям поиска.
 
     При совпадении ключевых слов создает или обновляет TenderMatch.
     Возвращает количество созданных/обновленных совпадений.
     """
-    profiles = session.execute(
+    profiles = list(session.execute(
         select(SearchProfile).where(SearchProfile.is_active.is_(True))
-    ).scalars()
+    ).scalars())
 
     matches_count = 0
     text = " ".join(
@@ -192,7 +230,14 @@ def score_tender(session: Session, tender: Tender) -> int:
         if value
     )
 
+    tender_region = extract_tender_region(tender)
+
     for profile in profiles:
+        # Если в профиле заданы регионы, проверяем совпадение
+        if profile.regions:
+            if not tender_region or tender_region not in profile.regions:
+                continue
+
         result = score_text(text, profile.keywords, profile.negative_keywords)
 
         min_score = profile.min_score or 0.0

@@ -55,6 +55,13 @@
               <span v-if="!profile.negative_keywords" class="no-tags">Не заданы</span>
             </div>
           </div>
+          <div class="keyword-section mt-2">
+            <span class="section-label">Регионы поиска:</span>
+            <div class="tags-row">
+              <span v-for="reg in (profile.regions || [])" :key="reg" class="tag-badge region-tag">{{ getRegionName(reg) }}</span>
+              <span v-if="!profile.regions || profile.regions.length === 0" class="no-tags">Вся Беларусь</span>
+            </div>
+          </div>
         </div>
 
         <div class="profile-footer-stats">
@@ -168,6 +175,16 @@
             <textarea v-model="form.description" class="form-input" rows="3" placeholder="Укажите критерии релевантности для нейросети..."></textarea>
           </div>
 
+          <div class="form-group">
+            <label class="form-label">Регионы (Если ничего не выбрано — поиск по всей Беларуси)</label>
+            <div class="regions-grid">
+              <label class="checkbox-container" v-for="r in availableRegions" :key="r.code">
+                <input type="checkbox" :value="r.code" v-model="form.regions" />
+                <span class="checkbox-label">{{ r.name }}</span>
+              </label>
+            </div>
+          </div>
+
           <!-- Keywords Chip Inputs -->
           <div class="form-group">
             <label class="form-label">Ключевые слова (Enter или Запятая для разделения)</label>
@@ -252,6 +269,29 @@ export default {
     const editingProfileId = ref(null)
     const saving = ref(false)
 
+    const availableRegions = [
+      { code: '1', name: 'Брестская область' },
+      { code: '2', name: 'Витебская область' },
+      { code: '3', name: 'Гомельская область' },
+      { code: '4', name: 'Гродненская область' },
+      { code: '5', name: 'г. Минск' },
+      { code: '6', name: 'Минская область' },
+      { code: '7', name: 'Могилевская область' }
+    ]
+
+    const getRegionName = (code) => {
+      const regionsMap = {
+        '1': 'Брестская обл.',
+        '2': 'Витебская обл.',
+        '3': 'Гомельская обл.',
+        '4': 'Гродненская обл.',
+        '5': 'г. Минск',
+        '6': 'Минская обл.',
+        '7': 'Могилевская обл.'
+      }
+      return regionsMap[code] || code
+    }
+
     // Form states
     const form = ref({
       name: '',
@@ -259,7 +299,8 @@ export default {
       description: '',
       min_score: 50,
       schedule_interval: 'manual',
-      is_active: true
+      is_active: true,
+      regions: []
     })
 
     const formKeywords = ref([])
@@ -326,7 +367,8 @@ export default {
         description: '',
         min_score: 50,
         schedule_interval: 'manual',
-        is_active: true
+        is_active: true,
+        regions: []
       }
       formKeywords.value = []
       formNegativeKeywords.value = []
@@ -343,7 +385,8 @@ export default {
         description: profile.description || '',
         min_score: profile.min_score || 50,
         schedule_interval: profile.schedule_interval || 'manual',
-        is_active: profile.is_active
+        is_active: profile.is_active,
+        regions: profile.regions ? [...profile.regions] : []
       }
       formKeywords.value = parseKeywords(profile.keywords)
       formNegativeKeywords.value = parseKeywords(profile.negative_keywords)
@@ -406,7 +449,8 @@ export default {
         negative_keywords: formNegativeKeywords.value,
         min_score: form.value.min_score,
         is_active: form.value.is_active,
-        schedule_interval: form.value.schedule_interval
+        schedule_interval: form.value.schedule_interval,
+        regions: form.value.regions
       }
 
       try {
@@ -547,7 +591,9 @@ export default {
       deleteProfile,
       toggleProfileStatus,
       toggleChannelsExpander,
-      saveChannels
+      saveChannels,
+      availableRegions,
+      getRegionName
     }
   }
 }
@@ -939,4 +985,41 @@ input:checked + .slider:before { transform: translateX(12px); }
 }
 .mt-2 { margin-top: 0.5rem; }
 .mt-3 { margin-top: 0.75rem; }
+
+.tag-badge.region-tag {
+  background: rgba(139, 92, 246, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.regions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.checkbox-container:hover {
+  color: var(--text-main);
+}
+
+.checkbox-container input {
+  cursor: pointer;
+  accent-color: var(--primary);
+}
 </style>

@@ -124,3 +124,73 @@ def test_run_local_profile_routing(mock_enrich, db_session: Session):
     
     # Проверяем, что enrich_tender_if_needed вызвался ровно один раз для совпавшего тендера A
     mock_enrich.assert_called_once_with(db_session, tender_a, was_created=True, matches_count=1, source_code="goszakupki_by")
+
+
+@patch("worker.routing.enrich_tender_if_needed")
+def test_local_profile_routing_with_regions(mock_enrich, db_session: Session):
+    # 1. Создаем источник
+    source = TenderSource(code="goszakupki_by", name="Goszakupki", base_url="http://example.com")
+    db_session.add(source)
+    db_session.flush()
+    
+    # 2. Создаем поисковые профили с региональными ограничениями
+    profile_vitebsk = SearchProfile(
+        name="Vitebsk HVAC",
+        keywords=["кондиционер"],
+        regions=["2"], # Витебская область
+        min_score=Decimal("5.0"),
+        is_active=True,
+    )
+    profile_all = SearchProfile(
+        name="All Belarus HVAC",
+        keywords=["кондиционер"],
+        regions=[], # Все регионы
+        min_score=Decimal("5.0"),
+        is_active=True,
+    )
+    db_session.add(profile_vitebsk)
+    db_session.add(profile_all)
+    db_session.flush()
+    
+    # 3. Создаем тендеры с разными регионами
+    # Т1: Витебск (должен подойти под оба профиля)
+    tender_vitebsk = Tender(
+        source_id=source.id,
+        external_id="tender_vitebsk",
+        title="Закупка кондиционера",
+        customer_name="УЗ Витебская областная клиническая больница",
+        url="http://example.com/v",
+        is_matched_checked=False,
+        status="posted"
+    )
+    # Т2: Брест (должен подойти только под profile_all)
+    tender_brest = Tender(
+        source_id=source.id,
+        external_id="tender_brest",
+        title="Закупка кондиционера",
+        customer_name="Брестский облисполком",
+        url="http://example.com/b",
+        is_matched_checked=False,
+        status="posted"
+    )
+    
+    db_session.add_all([tender_vitebsk, tender_brest])
+    db_session.commit()
+    
+    # 4. Запускаем роутинг
+    matched_count = run_local_profile_routing(db_session)
+    
+    # 5. Проверяем результаты
+    # Т1 (vitebsk) подошел под 2 профиля (Vitebsk HVAC, All Belarus HVAC)
+    # Т2 (brest) подошел под 1 профиль (All Belarus HVAC)
+    # Итого должно быть 3 совпадения (matches)
+    assert matched_count == 3
+    
+    # Проверяем записи в БД
+    matches_vitebsk = db_session.query(TenderMatch).filter(TenderMatch.tender_id == tender_vitebsk.id).all()
+    assert len(matches_vitebsk) == 2
+    
+    matches_brest = db_session.query(TenderMatch).filter(TenderMatch.tender_id == tender_brest.id).all()
+    assert len(matches_brest) == 1
+    assert matches_brest[0].profile_id == profile_all.id
+
