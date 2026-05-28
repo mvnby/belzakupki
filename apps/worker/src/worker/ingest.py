@@ -120,7 +120,7 @@ def upsert_tender(
     session: Session,
     source: TenderSource,
     item: dict[str, Any],
-) -> tuple[Tender, bool]:
+) -> tuple[Tender | None, bool]:
     """Вставляет новый или обновляет существующий тендер в базе данных.
 
     Сравнивает хеши контента. Возвращает кортеж (Tender, is_created).
@@ -133,6 +133,17 @@ def upsert_tender(
         deadline_dt = parse_deadline_string(item.get("deadline"))
         
     published_dt = item.get("published_at")
+
+    # Filter out expired tenders: if deadline is in the past, skip
+    if deadline_dt:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        dl_aware = deadline_dt
+        if dl_aware.tzinfo is None:
+            dl_aware = dl_aware.replace(tzinfo=timezone.utc)
+        if dl_aware < now:
+            logger.info(f"Skipping expired tender '{item.get('title')}' with deadline {dl_aware}")
+            return None, False
 
     tender = session.execute(
         select(Tender).where(
@@ -336,6 +347,8 @@ def ingest_goszakupki_tenders(
 
     for item in items:
         tender, was_created = upsert_tender(session, source, item)
+        if tender is None:
+            continue
 
         if was_created:
             created += 1
@@ -403,6 +416,8 @@ def ingest_icetrade_tenders(
 
     for item in items:
         tender, was_created = upsert_tender(session, source, item)
+        if tender is None:
+            continue
 
         if was_created:
             created += 1
@@ -460,6 +475,8 @@ def ingest_butb_tenders(
 
     for item in items:
         tender, was_created = upsert_tender(session, source, item)
+        if tender is None:
+            continue
 
         if was_created:
             created += 1
@@ -517,6 +534,8 @@ def ingest_gias_tenders(
 
     for item in items:
         tender, was_created = upsert_tender(session, source, item)
+        if tender is None:
+            continue
 
         if was_created:
             created += 1

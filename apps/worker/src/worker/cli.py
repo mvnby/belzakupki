@@ -270,4 +270,14 @@ def ingest_gias() -> None:
             print(f"Sent messages for {count} matches.")
 
 
+def clean() -> None:
+    from belzakupki_db.models import Tender, TenderMatch
+    with SessionLocal() as session:
+        match_count = session.query(TenderMatch).delete()
+        tender_count = session.query(Tender).delete()
+        session.commit()
+    print(f"Cleaned database: deleted {match_count} matches and {tender_count} tenders.")
+
+
+
 

@@ -49,6 +49,7 @@ addopts = "-v --tb=short"
 
 [project.scripts]
 belzakupki-seed = "worker.cli:seed"
+belzakupki-clean = "worker.cli:clean"
 belzakupki-ingest-goszakupki = "worker.cli:ingest_goszakupki"
 belzakupki-ingest-icetrade = "worker.cli:ingest_icetrade"
 belzakupki-list-tenders = "worker.cli:show_tenders"
