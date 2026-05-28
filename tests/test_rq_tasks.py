@@ -48,7 +48,14 @@ def test_client():
             session.close()
             
     app.dependency_overrides[get_session] = override_get_session
-    yield TestClient(app)
+    
+    from apps.api.main import create_access_token
+    token = create_access_token(data={"sub": "admin@belzakupki.by"})
+    
+    client = TestClient(app)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    yield client
+    
     app.dependency_overrides.clear()
     engine.dispose()
 

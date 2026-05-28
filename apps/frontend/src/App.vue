@@ -1,5 +1,5 @@
 <template>
-  <div v-if="isAuthPage" class="auth-wrapper">
+  <div v-if="isAuthPage || isLandingPage" class="auth-wrapper">
     <router-view />
   </div>
   <div v-else class="app-layout">
@@ -17,30 +17,42 @@
             Панель управления
           </router-link>
         </li>
-        <li class="menu-item">
-          <router-link to="/profiles" class="menu-link" active-class="active">
-            <span class="menu-icon">🔍</span>
-            Профили поиска
-          </router-link>
-        </li>
-        <li class="menu-item">
-          <router-link to="/matches" class="menu-link" active-class="active">
-            <span class="menu-icon">🎯</span>
-            Совпадения
-          </router-link>
-        </li>
-        <li class="menu-item">
-          <router-link to="/analytics" class="menu-link" active-class="active">
-            <span class="menu-icon">📈</span>
-            Аналитика рынка
-          </router-link>
-        </li>
-        <li class="menu-item">
-          <router-link to="/crm-settings" class="menu-link" active-class="active">
-            <span class="menu-icon">💼</span>
-            Интеграция CRM
-          </router-link>
-        </li>
+        <!-- Admin Menu Items -->
+        <template v-if="store.user?.role === 'admin'">
+          <li class="menu-item">
+            <router-link to="/admin" class="menu-link" active-class="active">
+              <span class="menu-icon">🛠️</span>
+              Админ-Панель
+            </router-link>
+          </li>
+        </template>
+        <!-- Manager (Subscriber) Menu Items -->
+        <template v-else>
+          <li class="menu-item">
+            <router-link to="/profiles" class="menu-link" active-class="active">
+              <span class="menu-icon">🔍</span>
+              Профили поиска
+            </router-link>
+          </li>
+          <li class="menu-item">
+            <router-link to="/matches" class="menu-link" active-class="active">
+              <span class="menu-icon">🎯</span>
+              Совпадения
+            </router-link>
+          </li>
+          <li class="menu-item">
+            <router-link to="/analytics" class="menu-link" active-class="active">
+              <span class="menu-icon">📈</span>
+              Аналитика рынка
+            </router-link>
+          </li>
+          <li class="menu-item">
+            <router-link to="/crm-settings" class="menu-link" active-class="active">
+              <span class="menu-icon">💼</span>
+              Интеграция CRM
+            </router-link>
+          </li>
+        </template>
       </ul>
 
       <!-- User Profile Card -->
@@ -87,9 +99,13 @@ const isAuthPage = computed(() => {
   return route.name === 'Login' || route.name === 'Register'
 })
 
+const isLandingPage = computed(() => {
+  return route.name === 'Landing'
+})
+
 const handleLogout = () => {
   store.setToken('')
-  router.push({ name: 'Login' })
+  router.push({ name: 'Landing' })
 }
 </script>
 

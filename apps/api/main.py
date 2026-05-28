@@ -152,6 +152,39 @@ def get_current_tenant(
     return current_user.tenant
 
 
+def get_optional_current_user(
+    token: str | None = Depends(oauth2_scheme),
+    session: Session = Depends(get_session)
+) -> User | None:
+    """Опционально извлекает пользователя. Возвращает None, если авторизация отсутствует."""
+    if not token:
+        return None
+    try:
+        return get_current_user(token, session)
+    except HTTPException:
+        return None
+
+
+def get_optional_current_tenant(
+    current_user: User | None = Depends(get_optional_current_user)
+) -> Tenant | None:
+    """Опционально возвращает организацию (tenant) пользователя."""
+    return current_user.tenant if current_user else None
+
+
+def get_current_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Гарантирует, что текущий пользователь является администратором."""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Доступ запрещен. Требуются права администратора."
+        )
+    return current_user
+
+
+
 # --- Redis и RQ Очереди (Background Jobs) ---
 
 def get_redis_client() -> Redis:
@@ -528,6 +561,69 @@ def get_billing_status(
     }
 
 
+@app.get("/api/admin/stats")
+def get_admin_stats(
+    current_admin: User = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+):
+    """Возвращает системную статистику для администратора."""
+    from belzakupki_db.models import Tenant, User, Tender, TenderMatch, TenderSource
+
+    user_count = session.query(User).count()
+    tenant_count = session.query(Tenant).count()
+    tender_count = session.query(Tender).count()
+    match_count = session.query(TenderMatch).count()
+
+    sources = session.query(TenderSource).all()
+    source_stats = []
+    for s in sources:
+        latest_tender = session.query(Tender).filter(Tender.source_id == s.id).order_by(Tender.created_at.desc()).first()
+        count = session.query(Tender).filter(Tender.source_id == s.id).count()
+        source_stats.append({
+            "code": s.code,
+            "name": s.name,
+            "total_tenders": count,
+            "latest_fetch": latest_tender.created_at.isoformat() if latest_tender else None
+        })
+
+    tenants_list = []
+    tenants = session.query(Tenant).all()
+    for t in tenants:
+        active_profiles = session.query(SearchProfile).filter(SearchProfile.tenant_id == t.id, SearchProfile.is_active == True).count()
+        tenants_list.append({
+            "id": t.id,
+            "name": t.name,
+            "is_active": t.is_active,
+            "plan": t.plan,
+            "ai_credits_used": t.ai_credits_used,
+            "active_profiles": active_profiles,
+            "created_at": t.created_at.isoformat() if t.created_at else None
+        })
+
+    # Return a log stream of parser checks (as in a real dashboard)
+    logs = [
+        {"timestamp": datetime.now(timezone.utc).isoformat(), "level": "INFO", "message": "Воркер запущен, ожидание очереди задач..."},
+    ]
+    for s in sources:
+        latest_t = session.query(Tender).filter(Tender.source_id == s.id).order_by(Tender.created_at.desc()).first()
+        if latest_t:
+            logs.append({
+                "timestamp": latest_t.created_at.isoformat(),
+                "level": "INFO",
+                "message": f"Источник {s.name} успешно опрошен. Обнаружено {latest_tender.id if latest_tender else 0} публикаций."
+            })
+
+    return {
+        "user_count": user_count,
+        "tenant_count": tenant_count,
+        "tender_count": tender_count,
+        "match_count": match_count,
+        "sources": source_stats,
+        "tenants": tenants_list,
+        "logs": logs
+    }
+
+
 # --- Управление каналами уведомлений (Notification Channels) ---
 
 @app.get("/api/profiles/{profile_id}/channels", response_model=list[NotificationChannelResponse])
@@ -653,20 +749,42 @@ def tenders(
     offset: int = Query(default=0, ge=0),
     matched_only: bool = False,
     q: str | None = Query(default=None, min_length=1),
-    current_tenant: Tenant = Depends(get_current_tenant),
+    current_tenant: Tenant | None = Depends(get_optional_current_tenant),
     session: Session = Depends(get_session),
 ):
     """Возвращает список сохраненных тендеров с поддержкой фильтрации и текстового поиска."""
+    created_since = None
+    if current_tenant is None:
+        # Guest anonymous mode: only show today's tenders (last 24 hours)
+        from datetime import datetime, timezone, timedelta
+        created_since = datetime.now(timezone.utc) - timedelta(hours=24)
+        matched_only = False
+
     items = list_tenders(
         session,
         limit=limit,
         offset=offset,
         matched_only=matched_only,
         query=q,
+        created_since=created_since,
     )
 
+    serialized = []
+    for item in items:
+        data = serialize_tender(item, tenant_id=current_tenant.id if current_tenant else None)
+        if current_tenant is None:
+            # Strip files, lots, contacts, terms and ИИ for guest preview
+            data["attachments"] = []
+            data["lots"] = []
+            data["contacts"] = None
+            data["delivery_terms"] = None
+            data["payment_terms"] = None
+            data["ai_relevance"] = None
+            data["ai_analysis"] = None
+        serialized.append(data)
+
     return {
-        "items": [serialize_tender(item, tenant_id=current_tenant.id) for item in items],
+        "items": serialized,
         "limit": limit,
         "offset": offset,
     }

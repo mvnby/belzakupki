@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any
+from datetime import datetime
 
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -118,6 +119,7 @@ def list_tenders(
     offset: int = 0,
     matched_only: bool = False,
     query: str | None = None,
+    created_since: datetime | None = None,
 ) -> list[Tender]:
     """Возвращает список тендеров с сортировкой по дате создания (убывание).
 
@@ -132,6 +134,9 @@ def list_tenders(
         )
         .order_by(Tender.created_at.desc(), Tender.id.desc())
     )
+
+    if created_since is not None:
+        stmt = stmt.where(Tender.created_at >= created_since)
 
     if matched_only:
         stmt = stmt.join(Tender.matches).distinct()
