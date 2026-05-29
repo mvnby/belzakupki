@@ -61,8 +61,10 @@ export const store = reactive({
   },
 
   async loadUser() {
-    // In dev mode (without configured secret key), get_current_user falls back 
-    // to default user even without token.
+    // If there is no token, do not attempt to auto-login, to allow guest view testing.
+    if (!this.token) {
+      return false
+    }
     try {
       const user = await this.fetch('/api/auth/me')
       this.user = user

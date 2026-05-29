@@ -1475,3 +1475,28 @@ async def post_match_chat_message(
     return assistant_msg
 
 
+@app.get("/{catchall:path}", response_class=HTMLResponse)
+def catch_all(catchall: str, response: Response):
+    """Возвращает index.html для всех роутов SPA (Vite/Vue), кроме API и статических файлов."""
+    if (
+        catchall.startswith("api") 
+        or catchall.startswith("assets") 
+        or catchall.endswith(".js") 
+        or catchall.endswith(".css") 
+        or catchall.endswith(".svg")
+        or catchall.endswith(".png")
+        or catchall.endswith(".ico")
+    ):
+        raise HTTPException(status_code=404, detail="Not Found")
+        
+    file_path = "apps/api/static/index.html"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Frontend HTML file not found")
+        
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
