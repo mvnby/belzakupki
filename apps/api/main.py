@@ -708,6 +708,8 @@ def trigger_ingest(
     current_tenant: Tenant = Depends(get_current_tenant),
 ):
     """Инициирует запуск фонового задания сбора тендеров через очередь RQ."""
+    if current_tenant.plan == "free":
+        raise HTTPException(status_code=403, detail="Запуск сборов доступен только на платных тарифах")
     r = get_redis_client()
     status_key = f"belzakupki:task:ingest:{current_tenant.id}"
     
@@ -727,6 +729,8 @@ def trigger_notify(
     current_tenant: Tenant = Depends(get_current_tenant),
 ):
     """Инициирует запуск фонового задания отправки уведомлений через очередь RQ."""
+    if current_tenant.plan == "free":
+        raise HTTPException(status_code=403, detail="Запуск рассылок доступен только на платных тарифах")
     r = get_redis_client()
     status_key = f"belzakupki:task:notify:{current_tenant.id}"
     
@@ -1307,6 +1311,8 @@ def get_match_chat_history(
     session: Session = Depends(get_session),
 ):
     """Возвращает историю чата с ИИ по конкретному совпадению."""
+    if current_user.tenant.plan == "free":
+        raise HTTPException(status_code=403, detail="ИИ чат-ассистент доступен только на платных тарифах")
     match = session.query(TenderMatch).join(TenderMatch.profile).filter(
         TenderMatch.id == match_id,
         SearchProfile.tenant_id == current_user.tenant_id
@@ -1372,6 +1378,8 @@ async def post_match_chat_message(
     session: Session = Depends(get_session),
 ):
     """Отправляет сообщение ИИ-ассистенту и возвращает его ответ в контексте документов тендера."""
+    if current_user.tenant.plan == "free":
+        raise HTTPException(status_code=403, detail="ИИ чат-ассистент доступен только на платных тарифах")
     import httpx
     import logging
     logger = logging.getLogger("belzakupki.chat")

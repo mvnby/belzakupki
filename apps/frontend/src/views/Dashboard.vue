@@ -9,7 +9,8 @@
         <button
           @click="triggerIngest"
           class="btn btn-primary"
-          :disabled="stats.tasks?.ingest === 'running'"
+          :disabled="stats.tasks?.ingest === 'running' || store.tenant?.plan === 'free'"
+          :title="store.tenant?.plan === 'free' ? 'Доступно только на платных тарифах' : ''"
         >
           <span class="btn-icon">⚡</span>
           {{ stats.tasks?.ingest === 'running' ? 'Сбор идет...' : 'Запустить сбор' }}
@@ -17,7 +18,8 @@
         <button
           @click="triggerNotify"
           class="btn btn-secondary"
-          :disabled="stats.tasks?.notify === 'running'"
+          :disabled="stats.tasks?.notify === 'running' || store.tenant?.plan === 'free'"
+          :title="store.tenant?.plan === 'free' ? 'Доступно только на платных тарифах' : ''"
         >
           <span class="btn-icon">✉️</span>
           {{ stats.tasks?.notify === 'running' ? 'Рассылка...' : 'Рассылка Telegram' }}
@@ -57,7 +59,16 @@
       </div>
     </div>
 
-    <div class="dashboard-content-layout">
+    <!-- Premium Upgrade Banner for Free Users -->
+    <div v-if="store.tenant?.plan === 'free'" class="glass-card premium-upgrade-banner mt-3">
+      <div class="banner-content">
+        <span class="banner-badge">🔑 Ознакомительный тариф</span>
+        <h3>Активируйте тариф Starter или Pro</h3>
+        <p>Вам доступен бесплатный режим: 1 поисковый профиль и локальное сопоставление ключевых слов. Обратитесь к администратору, чтобы подключить платный тариф и открыть ИИ-экспертизу ТЗ, ИИ чат-ассистента, экспорт в CRM и авто-оповещения в Telegram/Viber.</p>
+      </div>
+    </div>
+
+    <div class="dashboard-content-layout" style="margin-top: 1.5rem;">
       <!-- Welcome Panel -->
       <div class="glass-card welcome-panel">
         <h3>Состояние системы и источники</h3>
@@ -278,5 +289,38 @@ export default {
 }
 .tips-list a:hover {
   text-decoration: underline;
+}
+
+/* Premium Upgrade Banner */
+.premium-upgrade-banner {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.08));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.banner-badge {
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  display: inline-block;
+  margin-bottom: 0.75rem;
+}
+
+.premium-upgrade-banner h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.premium-upgrade-banner p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
 }
 </style>

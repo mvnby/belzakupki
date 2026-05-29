@@ -287,7 +287,14 @@
                 <h4>Анализ искусственного интеллекта (DeepSeek RAG)</h4>
               </div>
 
-              <div v-if="!selectedMatch.ai_analysis" class="ai-empty-analysis">
+              <div v-if="store.tenant?.plan === 'free'" class="ai-empty-analysis premium-locked-box" style="text-align: center; padding: 3rem 1.5rem;">
+                <span class="lock-icon" style="font-size: 2.5rem; display: block; margin-bottom: 0.75rem;">🔒</span>
+                <h5 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.5rem; color: #fff;">Экспертиза ИИ заблокирована</h5>
+                <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; max-width: 420px; margin: 0 auto;">
+                  Автоматический ИИ-анализ требований ТЗ, оценка рисков по неустойкам и чат-ассистент доступны только на платных тарифах. Обратитесь к администратору для подключения подписки.
+                </p>
+              </div>
+              <div v-else-if="!selectedMatch.ai_analysis" class="ai-empty-analysis">
                 <p>ИИ-экспертиза по данному тендеру еще не проводилась или спецификации не содержали читаемого текста.</p>
               </div>
               <div v-else>

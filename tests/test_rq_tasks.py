@@ -26,7 +26,7 @@ def test_client():
     
     # Pre-seed default user/tenant so get_current_user fallback works
     session = TestingSessionLocal()
-    tenant = Tenant(name="ООО Ромашка")
+    tenant = Tenant(name="ООО Ромашка", plan="professional")
     session.add(tenant)
     session.flush()
     user = User(

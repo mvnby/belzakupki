@@ -68,7 +68,20 @@ export const store = reactive({
     try {
       const user = await this.fetch('/api/auth/me')
       this.user = user
-      this.tenant = { id: user.tenant_id, name: 'Моя организация' }
+      
+      // Also fetch billing status to get the current plan!
+      try {
+        const billing = await this.fetch('/api/billing/status')
+        this.tenant = { 
+          id: user.tenant_id, 
+          name: 'Моя организация',
+          plan: billing.plan 
+        }
+      } catch (billingErr) {
+        console.warn('Could not load billing status:', billingErr.message)
+        this.tenant = { id: user.tenant_id, name: 'Моя организация', plan: 'free' }
+      }
+      
       return true
     } catch (e) {
       console.warn('Could not load user profile:', e.message)

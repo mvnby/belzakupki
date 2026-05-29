@@ -83,6 +83,9 @@ def test_match_qa_chat(client):
     # 2. Seed DB with Tender, TenderMatch, and TenderDocuments
     session = TestingSessionLocal()
     tenant = session.query(Tenant).first()
+    tenant.plan = "professional"
+    session.add(tenant)
+    session.flush()
     user = session.query(User).first()
     
     source = TenderSource(code="test_src", name="Test Source", base_url="https://test.by")

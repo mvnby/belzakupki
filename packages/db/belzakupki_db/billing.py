@@ -10,7 +10,7 @@ from belzakupki_db.models import Tenant
 PLAN_LIMITS = {
     "free": {
         "max_active_profiles": 1,
-        "max_ai_credits": 10,
+        "max_ai_credits": 0,
         "max_channels_per_profile": 1,
     },
     "starter": {

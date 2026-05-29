@@ -246,7 +246,7 @@ def test_worker_ai_credit_increment_on_success(client_and_session):
 
     tenant = Tenant(
         name="AI Tenant Success",
-        plan="free",
+        plan="starter",
         ai_credits_used=2,
         billing_cycle_started_at=datetime.now(timezone.utc)
     )
