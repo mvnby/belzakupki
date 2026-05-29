@@ -66,7 +66,11 @@
       </div>
 
       <div class="glass-card feed-container">
-        <div class="table-container" v-if="tenders.length > 0">
+        <div v-if="isLoading" class="empty-state" style="padding: 4rem; text-align: center;">
+          <div class="spinner" style="margin: 0 auto 1rem auto; width: 40px; height: 40px;"></div>
+          <h3>Загрузка свежих тендеров...</h3>
+        </div>
+        <div v-else-if="tenders.length > 0" class="table-container">
           <table class="custom-table">
             <thead>
               <tr>
@@ -92,8 +96,11 @@
           </table>
         </div>
         <div v-else class="empty-state" style="padding: 4rem; text-align: center;">
-          <div class="spinner" style="margin: 0 auto 1rem auto; width: 40px; height: 40px;"></div>
-          <h3>Загрузка свежих тендеров...</h3>
+          <div class="empty-icon" style="font-size: 2.5rem; margin-bottom: 1rem;">📂</div>
+          <h3>Новых тендеров за сегодня не найдено</h3>
+          <p style="color: var(--text-muted); margin-top: 0.5rem; max-width: 450px; margin-left: auto; margin-right: auto;">
+            Система пока не собрала свежих публикаций за последние 24 часа. Зарегистрируйтесь бесплатно, чтобы получить полный доступ к исторической базе тендеров и настроить автопоиск.
+          </p>
         </div>
       </div>
     </section>
@@ -148,14 +155,18 @@ import { store } from '../store.js'
 
 const tenders = ref([])
 const selectedTender = ref(null)
+const isLoading = ref(true)
 
 const loadTodayTenders = async () => {
+  isLoading.value = true
   try {
     // API returns last 24h tenders for Guest/unauthenticated requests automatically
     const res = await store.fetch('/api/tenders?limit=15')
     tenders.value = res.items
   } catch (e) {
     console.error('Failed to load today tenders:', e)
+  } finally {
+    isLoading.value = false
   }
 }
 
