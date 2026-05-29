@@ -55,7 +55,7 @@ def test_saas_register_and_login(client):
     data = response.json()
     assert data["email"] == "test@belzakupki.by"
     assert data["full_name"] == "Test User"
-    assert data["role"] == "admin"
+    assert data["role"] == "manager"
     assert data["tenant_id"] is not None
 
     # 2. Login

@@ -327,7 +327,7 @@ def register_user(data: UserCreate, session: Session = Depends(get_session)):
         email=data.email,
         hashed_password=hash_password(data.password),
         full_name=data.full_name,
-        role="admin"
+        role="manager"
     )
     session.add(user)
     session.commit()
