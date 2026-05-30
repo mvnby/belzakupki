@@ -188,6 +188,7 @@ export default {
 
     return {
       stats,
+      store,
       triggerIngest,
       triggerNotify
     }

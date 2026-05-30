@@ -857,6 +857,7 @@ export default {
 
     return {
       matches,
+      store,
       profiles,
       loading,
       limit,
