@@ -61,10 +61,17 @@
 
     <!-- Premium Upgrade Banner for Free Users -->
     <div v-if="store.tenant?.plan === 'free'" class="glass-card premium-upgrade-banner mt-3">
-      <div class="banner-content">
-        <span class="banner-badge">🔑 Ознакомительный тариф</span>
-        <h3>Активируйте тариф Starter или Pro</h3>
-        <p>Вам доступен бесплатный режим: 1 поисковый профиль и локальное сопоставление ключевых слов. Обратитесь к администратору, чтобы подключить платный тариф и открыть ИИ-экспертизу ТЗ, ИИ чат-ассистента, экспорт в CRM и авто-оповещения в Telegram/Viber.</p>
+      <div class="banner-flex-container" style="display: flex; justify-content: space-between; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+        <div class="banner-content" style="flex: 1; min-width: 280px;">
+          <span class="banner-badge">🔑 Ознакомительный тариф</span>
+          <h3>Активируйте тариф Starter или Pro</h3>
+          <p>Вам доступен бесплатный режим: 1 поисковый профиль и локальное сопоставление ключевых слов. Обратитесь к администратору, чтобы подключить платный тариф и открыть ИИ-экспертизу ТЗ, ИИ чат-ассистента, экспорт в CRM и авто-оповещения в Telegram/Viber.</p>
+        </div>
+        <div class="banner-action">
+          <router-link to="/landing#pricing" class="btn btn-primary" style="white-space: nowrap; box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);">
+            💎 Выбрать тариф
+          </router-link>
+        </div>
       </div>
     </div>
 

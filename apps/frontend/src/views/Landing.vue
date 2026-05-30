@@ -7,8 +7,13 @@
         <div class="logo-text"><span class="gradient-text">BelZakupki</span></div>
       </div>
       <div class="nav-actions">
-        <router-link to="/login" class="btn btn-secondary btn-sm" style="margin-right: 0.75rem;">Войти</router-link>
-        <router-link to="/register" class="btn btn-primary btn-sm">Регистрация</router-link>
+        <template v-if="store.isAuthenticated">
+          <router-link to="/dashboard" class="btn btn-primary btn-sm">Панель управления</router-link>
+        </template>
+        <template v-else>
+          <router-link to="/login" class="btn btn-secondary btn-sm" style="margin-right: 0.75rem;">Войти</router-link>
+          <router-link to="/register" class="btn btn-primary btn-sm">Регистрация</router-link>
+        </template>
       </div>
     </header>
 
@@ -51,6 +56,93 @@
           <div class="feature-icon">💼</div>
           <h3>Интеграция с CRM</h3>
           <p>Экспорт лидов в amoCRM и Bitrix24 в один клик с полным ИИ-отчетом и ссылками на документы.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pricing Plans Section -->
+    <section id="pricing" class="pricing-section">
+      <h2 class="section-title">Тарифные планы</h2>
+      <p class="section-subtitle" style="text-align: center; margin-top: -2rem; margin-bottom: 3rem; color: var(--text-muted);">
+        Выберите подходящий уровень доступа для вашей команды
+      </p>
+      
+      <div class="pricing-grid">
+        <!-- Free Plan -->
+        <div class="glass-card pricing-card">
+          <div class="plan-header">
+            <span class="plan-name">Гость</span>
+            <div class="plan-price">0 BYN <span class="price-period">/ всегда</span></div>
+          </div>
+          <ul class="plan-features">
+            <li><span class="feature-check">✓</span> <strong>1</strong> поисковый профиль</li>
+            <li><span class="feature-check">✓</span> Локальный скоринг по ключевым словам</li>
+            <li><span class="feature-check">✓</span> <strong>1</strong> канал уведомлений</li>
+            <li class="feature-disabled"><span class="feature-cross">✗</span> Интеллектуальный ИИ-анализ ТЗ</li>
+            <li class="feature-disabled"><span class="feature-cross">✗</span> Вопросы ИИ-ассистенту в чате</li>
+            <li class="feature-disabled"><span class="feature-cross">✗</span> Автоматическая выгрузка в CRM</li>
+          </ul>
+          <button @click="handlePlanSelection('Гость')" class="btn btn-secondary btn-block text-center mt-auto">
+            {{ store.isAuthenticated ? 'Уже подключен' : 'Начать бесплатно' }}
+          </button>
+        </div>
+
+        <!-- Starter Plan -->
+        <div class="glass-card pricing-card">
+          <div class="plan-header">
+            <span class="plan-name">Starter</span>
+            <div class="plan-price">99 BYN <span class="price-period">/ мес</span></div>
+          </div>
+          <ul class="plan-features">
+            <li><span class="feature-check">✓</span> <strong>2</strong> активных профиля поиска</li>
+            <li><span class="feature-check">✓</span> <strong>30</strong> ИИ-анализов ТЗ в месяц</li>
+            <li><span class="feature-check">✓</span> <strong>1</strong> канал уведомлений (Telegram)</li>
+            <li><span class="feature-check">✓</span> ИИ-оценка рисков и условий договора</li>
+            <li><span class="feature-check">✓</span> Чат-ассистент по спецификациям</li>
+            <li class="feature-disabled"><span class="feature-cross">✗</span> Интеграция с CRM</li>
+          </ul>
+          <button @click="handlePlanSelection('Starter')" class="btn btn-primary btn-block text-center mt-auto">
+            Выбрать Starter
+          </button>
+        </div>
+
+        <!-- Professional Plan (Popular) -->
+        <div class="glass-card pricing-card popular">
+          <div class="popular-badge">Популярный</div>
+          <div class="plan-header">
+            <span class="plan-name">Professional</span>
+            <div class="plan-price">299 BYN <span class="price-period">/ мес</span></div>
+          </div>
+          <ul class="plan-features">
+            <li><span class="feature-check">✓</span> <strong>10</strong> профилей поиска</li>
+            <li><span class="feature-check">✓</span> <strong>200</strong> ИИ-анализов ТЗ в месяц</li>
+            <li><span class="feature-check">✓</span> <strong>3</strong> канала уведомлений (Viber/TG)</li>
+            <li><span class="feature-check">✓</span> Полный ИИ-анализ и RAG чат-ассистент</li>
+            <li><span class="feature-check">✓</span> Автоматический экспорт в CRM</li>
+            <li><span class="feature-check">✓</span> Приоритетная поддержка</li>
+          </ul>
+          <button @click="handlePlanSelection('Professional')" class="btn btn-primary btn-block text-center mt-auto">
+            Выбрать Professional
+          </button>
+        </div>
+
+        <!-- Enterprise Plan -->
+        <div class="glass-card pricing-card">
+          <div class="plan-header">
+            <span class="plan-name">Enterprise</span>
+            <div class="plan-price">Индивидуально</div>
+          </div>
+          <ul class="plan-features">
+            <li><span class="feature-check">✓</span> <strong>Безлимитные</strong> профили поиска</li>
+            <li><span class="feature-check">✓</span> <strong>Безлимитный</strong> ИИ-анализ ТЗ</li>
+            <li><span class="feature-check">✓</span> Интеграция с любыми CRM системами</li>
+            <li><span class="feature-check">✓</span> Выделенный сервер RAG / DeepSeek</li>
+            <li><span class="feature-check">✓</span> Персональный менеджер 24/7</li>
+            <li><span class="feature-check">✓</span> Разработка кастомных интеграций</li>
+          </ul>
+          <a href="mailto:support@belzakupki.by?subject=Заявка на Enterprise тариф BelZakupki" class="btn btn-secondary btn-block text-center mt-auto">
+            Связаться с нами
+          </a>
         </div>
       </div>
     </section>
@@ -151,7 +243,11 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { store } from '../store.js'
+
+const router = useRouter()
+const route = useRoute()
 
 const tenders = ref([])
 const selectedTender = ref(null)
@@ -174,6 +270,18 @@ const openPreview = (tender) => {
   selectedTender.value = tender
 }
 
+const handlePlanSelection = (planName) => {
+  if (store.isAuthenticated) {
+    if (planName === 'Гость') {
+      alert('Данный ознакомительный тариф уже подключен для вашей организации.');
+      return;
+    }
+    alert(`Для перехода на тариф "${planName}", пожалуйста, свяжитесь с вашим администратором или напишите нам на support@belzakupki.by. Мы обновим тариф вашей организации.`);
+  } else {
+    router.push({ name: 'Register' });
+  }
+}
+
 const truncateText = (text, len) => {
   if (!text) return ''
   return text.length > len ? text.substring(0, len) + '...' : text
@@ -191,6 +299,16 @@ const formatDate = (dateStr) => {
 
 onMounted(() => {
   loadTodayTenders()
+  
+  // Smooth scroll to pricing if hash exists
+  if (route.hash === '#pricing' || window.location.hash.includes('pricing')) {
+    setTimeout(() => {
+      const el = document.getElementById('pricing')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth' })
+      }
+    }, 300)
+  }
 })
 </script>
 
@@ -401,5 +519,130 @@ h1 {
   font-size: 0.9rem;
   line-height: 1.5;
   margin-bottom: 1.5rem;
+}
+
+/* Pricing Section Styles */
+.pricing-section {
+  max-width: 1200px;
+  margin: 0 auto 6rem auto;
+}
+
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 2rem;
+  align-items: stretch;
+}
+
+.pricing-card {
+  padding: 2.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(17, 24, 39, 0.4);
+  backdrop-filter: blur(12px);
+  position: relative;
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.pricing-card:hover {
+  transform: translateY(-5px);
+  border-color: rgba(59, 130, 246, 0.15);
+  box-shadow: 0 10px 30px -10px rgba(59, 130, 246, 0.1);
+}
+
+.pricing-card.popular {
+  border-color: rgba(139, 92, 246, 0.3);
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.06), rgba(17, 24, 39, 0.4));
+  box-shadow: var(--shadow-glow);
+}
+
+.pricing-card.popular:hover {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 10px 30px -10px rgba(139, 92, 246, 0.2);
+}
+
+.popular-badge {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, var(--secondary), #a78bfa);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 1rem;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+}
+
+.plan-header {
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.plan-name {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-main);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.plan-price {
+  font-family: var(--font-display);
+  font-size: 2.25rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.price-period {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.plan-features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 2.5rem 0;
+}
+
+.plan-features li {
+  font-size: 0.9rem;
+  color: var(--text-main);
+  margin-bottom: 0.85rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  line-height: 1.4;
+}
+
+.plan-features li.feature-disabled {
+  color: var(--text-muted);
+}
+
+.feature-check {
+  color: var(--success);
+  font-weight: bold;
+}
+
+.feature-cross {
+  color: var(--error);
+  font-weight: bold;
+}
+
+.mt-auto {
+  margin-top: auto;
+}
+.btn-block {
+  width: 100%;
+  display: block;
 }
 </style>
