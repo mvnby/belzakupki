@@ -29,6 +29,7 @@ from loguru import logger
 _POLL_INTERVAL = int(os.getenv("SCHEDULER_POLL_INTERVAL", "60"))
 _MAX_WORKERS = int(os.getenv("SCHEDULER_MAX_WORKERS", "4"))
 _last_results_check_time = 0.0
+_last_feed_ingest_time = 0.0
 
 # Semaphore limits concurrent per-profile threads so we can't saturate
 # resources with dozens of profiles all triggering at the same moment.
@@ -118,7 +119,7 @@ def _scheduler_loop() -> None:
         f"max_workers={_MAX_WORKERS})"
     )
 
-    global _last_results_check_time
+    global _last_results_check_time, _last_feed_ingest_time
 
     while True:
         try:
@@ -137,6 +138,20 @@ def _scheduler_loop() -> None:
                         logger.exception("Scheduler: error during periodic results check")
                 
                 threading.Thread(target=run_results_check, daemon=True, name="scheduler-results-check").start()
+
+            # Periodic centralized feed crawl / ingest (every 30 minutes)
+            if now_ts - _last_feed_ingest_time >= 1800:
+                _last_feed_ingest_time = now_ts
+                
+                def run_global_ingest():
+                    logger.info("Scheduler: starting periodic centralized feed ingest in background thread")
+                    try:
+                        from worker.tasks import run_ingest_task_job
+                        run_ingest_task_job(tenant_id=None)
+                    except Exception:
+                        logger.exception("Scheduler: error during periodic centralized feed ingest")
+                        
+                threading.Thread(target=run_global_ingest, daemon=True, name="scheduler-global-ingest").start()
 
             with SessionLocal() as session:
                 profiles = (

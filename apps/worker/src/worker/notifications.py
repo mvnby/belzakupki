@@ -11,7 +11,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender
+from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender, SearchProfile
 from belzakupki_db.enums import MatchStatus, NotificationStatus
 
 
@@ -100,7 +100,7 @@ def format_tender_message(match: TenderMatch) -> str:
     return "\n".join([line for line in message_lines if line is not None])
 
 
-def dispatch_notifications(session: Session) -> int:
+def dispatch_notifications(session: Session, tenant_id: int | None = None) -> int:
     """Извлекает из базы данных новые совпадения и рассылает их по каналам уведомлений.
 
     - Исключает совпадения, забракованные ИИ на этапе экспресс-анализа.
@@ -121,6 +121,9 @@ def dispatch_notifications(session: Session) -> int:
         .where(TenderMatch.status == MatchStatus.NEW)
         .order_by(TenderMatch.created_at.asc())
     )
+    if tenant_id is not None:
+        stmt = stmt.join(TenderMatch.profile).where(SearchProfile.tenant_id == tenant_id)
+
     matches = list(session.execute(stmt).scalars())
     
     if not matches:
