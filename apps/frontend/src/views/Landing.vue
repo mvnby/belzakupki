@@ -91,7 +91,7 @@
         <div class="glass-card pricing-card">
           <div class="plan-header">
             <span class="plan-name">Starter</span>
-            <div class="plan-price">99 BYN <span class="price-period">/ мес</span></div>
+            <div class="plan-price">19 BYN <span class="price-period">/ мес</span></div>
           </div>
           <ul class="plan-features">
             <li><span class="feature-check">✓</span> <strong>2</strong> активных профиля поиска</li>
@@ -111,7 +111,7 @@
           <div class="popular-badge">Популярный</div>
           <div class="plan-header">
             <span class="plan-name">Professional</span>
-            <div class="plan-price">299 BYN <span class="price-period">/ мес</span></div>
+            <div class="plan-price">49 BYN <span class="price-period">/ мес</span></div>
           </div>
           <ul class="plan-features">
             <li><span class="feature-check">✓</span> <strong>10</strong> профилей поиска</li>
