@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender, SearchProfile
 from belzakupki_db.enums import MatchStatus, NotificationStatus
+from worker.resource_limits import positive_int_env
+
+
+NOTIFICATION_BATCH_SIZE = positive_int_env("WORKER_NOTIFICATION_BATCH_SIZE", 50)
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
@@ -100,7 +104,10 @@ def format_tender_message(match: TenderMatch) -> str:
     return "\n".join([line for line in message_lines if line is not None])
 
 
-def dispatch_notifications(session: Session, tenant_id: int | None = None) -> int:
+def _dispatch_notification_batch(
+    session: Session,
+    tenant_id: int | None = None,
+) -> tuple[int, int]:
     """Извлекает из базы данных новые совпадения и рассылает их по каналам уведомлений.
 
     - Исключает совпадения, забракованные ИИ на этапе экспресс-анализа.
@@ -118,8 +125,12 @@ def dispatch_notifications(session: Session, tenant_id: int | None = None) -> in
             joinedload(TenderMatch.tender).joinedload(Tender.source),
             joinedload(TenderMatch.profile),
         )
-        .where(TenderMatch.status == MatchStatus.NEW)
+        .where(
+            TenderMatch.status == MatchStatus.NEW,
+            TenderMatch.ai_relevance.is_(True),
+        )
         .order_by(TenderMatch.created_at.asc())
+        .limit(NOTIFICATION_BATCH_SIZE)
     )
     if tenant_id is not None:
         stmt = stmt.join(TenderMatch.profile).where(SearchProfile.tenant_id == tenant_id)
@@ -128,7 +139,7 @@ def dispatch_notifications(session: Session, tenant_id: int | None = None) -> in
     
     if not matches:
         logger.info("No new tender matches to notify.")
-        return 0
+        return 0, 0
         
     logger.info(f"Found {len(matches)} new tender matches to process.")
     dispatched_count = 0
@@ -236,4 +247,33 @@ def dispatch_notifications(session: Session, tenant_id: int | None = None) -> in
         
     session.commit()
     logger.info(f"Dispatched notifications for {dispatched_count} matches.")
-    return dispatched_count
+    return len(matches), dispatched_count
+
+
+def dispatch_notifications(
+    session: Session,
+    tenant_id: int | None = None,
+    *,
+    drain: bool = False,
+) -> int:
+    """Dispatch one bounded batch, or drain all currently eligible batches.
+
+    The default preserves the existing CLI/API single-batch behavior. Worker
+    jobs use ``drain=True`` and release ORM objects between batches.
+    """
+    selected_count, dispatched_count = _dispatch_notification_batch(
+        session,
+        tenant_id,
+    )
+    if not drain:
+        return dispatched_count
+
+    total_dispatched = dispatched_count
+    while selected_count:
+        session.expunge_all()
+        selected_count, batch_dispatched = _dispatch_notification_batch(
+            session,
+            tenant_id,
+        )
+        total_dispatched += batch_dispatched
+    return total_dispatched

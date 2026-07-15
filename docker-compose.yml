@@ -1,5 +1,12 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   api:
+    logging: *bounded-logging
     build: .
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     environment:
@@ -20,6 +27,8 @@ services:
         condition: service_healthy
 
   worker:
+    init: true
+    logging: *bounded-logging
     build: .
     command: python apps/worker/main.py
     environment:
@@ -31,14 +40,58 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
       DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
+      WORKER_AI_BATCH_SIZE: "${WORKER_AI_BATCH_SIZE:-10}"
+      WORKER_ROUTING_BATCH_SIZE: "${WORKER_ROUTING_BATCH_SIZE:-100}"
+      WORKER_RESULTS_BATCH_SIZE: "${WORKER_RESULTS_BATCH_SIZE:-50}"
+      WORKER_NOTIFICATION_BATCH_SIZE: "${WORKER_NOTIFICATION_BATCH_SIZE:-50}"
+      WORKER_OCR_MAX_PAGES: "${WORKER_OCR_MAX_PAGES:-12}"
+      WORKER_PDF_TEXT_MAX_PAGES: "${WORKER_PDF_TEXT_MAX_PAGES:-100}"
+      WORKER_MAX_ATTACHMENTS: "${WORKER_MAX_ATTACHMENTS:-10}"
+      WORKER_EXTRACTED_TEXT_MAX_CHARS: "${WORKER_EXTRACTED_TEXT_MAX_CHARS:-120000}"
+      WORKER_AI_DOCUMENT_CHARS: "${WORKER_AI_DOCUMENT_CHARS:-120000}"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  scheduler:
+    build: .
+    command: python apps/worker/scheduler_main.py
+    init: true
+    logging: *bounded-logging
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      REDIS_URL: redis://redis:6379/0
+      SCHEDULER_POLL_INTERVAL: "${SCHEDULER_POLL_INTERVAL:-60}"
+      SCHEDULER_MAX_PENDING: "${SCHEDULER_MAX_PENDING:-8}"
+      SCHEDULER_JOB_TIMEOUT: "${SCHEDULER_JOB_TIMEOUT:-3600}"
+      SCHEDULER_FAILED_JOB_TTL: "${SCHEDULER_FAILED_JOB_TTL:-300}"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  telegram:
+    build: .
+    command: python apps/worker/telegram_main.py
+    init: true
+    logging: *bounded-logging
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+    depends_on:
+      db:
+        condition: service_healthy
+
 
   db:
+    logging: *bounded-logging
     image: postgres:16
     environment:
       POSTGRES_USER: belzakupki
@@ -55,6 +108,7 @@ services:
       retries: 10
 
   redis:
+    logging: *bounded-logging
     image: redis:7
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
