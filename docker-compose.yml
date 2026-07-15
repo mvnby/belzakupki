@@ -40,8 +40,6 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
       DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
-      SCHEDULER_MAX_WORKERS: "${SCHEDULER_MAX_WORKERS:-1}"
-      SCHEDULER_MAX_PENDING: "${SCHEDULER_MAX_PENDING:-8}"
       WORKER_AI_BATCH_SIZE: "${WORKER_AI_BATCH_SIZE:-10}"
       WORKER_ROUTING_BATCH_SIZE: "${WORKER_ROUTING_BATCH_SIZE:-100}"
       WORKER_RESULTS_BATCH_SIZE: "${WORKER_RESULTS_BATCH_SIZE:-50}"
@@ -55,6 +53,40 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    command: python apps/worker/scheduler_main.py
+    init: true
+    logging: *bounded-logging
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      REDIS_URL: redis://redis:6379/0
+      SCHEDULER_POLL_INTERVAL: "${SCHEDULER_POLL_INTERVAL:-60}"
+      SCHEDULER_MAX_PENDING: "${SCHEDULER_MAX_PENDING:-8}"
+      SCHEDULER_JOB_TIMEOUT: "${SCHEDULER_JOB_TIMEOUT:-3600}"
+      SCHEDULER_FAILED_JOB_TTL: "${SCHEDULER_FAILED_JOB_TTL:-300}"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  telegram:
+    build: .
+    command: python apps/worker/telegram_main.py
+    init: true
+    logging: *bounded-logging
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+    depends_on:
+      db:
         condition: service_healthy
 
 

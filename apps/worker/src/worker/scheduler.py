@@ -1,43 +1,30 @@
-"""Profile-driven background scheduler for the belzakupki worker.
+"""Durable producer for profile-driven RQ jobs.
 
-Runs as a single daemon thread inside the worker process.  The API
-process is completely unaware of it and remains stateless.
-
-Architecture
-------------
-* One thread polls the DB every ``POLL_INTERVAL_SECONDS`` (default 60).
-* Due work is submitted to one bounded executor.  Duplicate periodic/profile
-  jobs cannot overlap and its waiting queue has a hard capacity.
-* An accepted profile's ``last_run_at`` is stamped before the run starts,
-  which prevents double-triggering even if the run takes longer than the
-  interval. Deferred work remains due for the next poll.
-
-Environment variables
----------------------
-SCHEDULER_POLL_INTERVAL   Seconds between DB polls (default: 60).
-SCHEDULER_MAX_WORKERS     Max concurrent heavy jobs (default: 1).
-SCHEDULER_MAX_PENDING     Max queued heavy jobs (default: 8).
+The scheduler never executes scraping, OCR, AI, or notification work itself.
+All heavy work goes through the single RQ worker execution plane.
 """
 from __future__ import annotations
 
-import threading
+import os
 import time
 from datetime import datetime, timezone
 
 from loguru import logger
-from worker.resource_limits import BoundedTaskExecutor, positive_int_env
+from redis import Redis
+from rq import Queue, Retry
+from rq.exceptions import DuplicateJobError
 
-_POLL_INTERVAL = positive_int_env("SCHEDULER_POLL_INTERVAL", 60)
-_MAX_WORKERS = positive_int_env("SCHEDULER_MAX_WORKERS", 1)
-_MAX_PENDING = positive_int_env("SCHEDULER_MAX_PENDING", 8)
-_last_results_check_time = 0.0
-_last_feed_ingest_time = 0.0
+from worker.resource_limits import positive_int_env
 
-_tasks = BoundedTaskExecutor(max_workers=_MAX_WORKERS, max_pending=_MAX_PENDING)
+
+POLL_INTERVAL_SECONDS = positive_int_env("SCHEDULER_POLL_INTERVAL", 60)
+MAX_PENDING_JOBS = positive_int_env("SCHEDULER_MAX_PENDING", 8)
+JOB_TIMEOUT_SECONDS = positive_int_env("SCHEDULER_JOB_TIMEOUT", 3600)
+FAILED_JOB_TTL_SECONDS = positive_int_env("SCHEDULER_FAILED_JOB_TTL", 300)
 
 
 def _parse_interval_seconds(interval_str: str) -> int | None:
-    """Convert '1h' / '4h' / '24h' / '30m' to seconds. Returns None on failure."""
+    """Convert ``1h`` / ``4h`` / ``24h`` / ``30m`` to seconds."""
     if not interval_str or interval_str == "manual":
         return None
     try:
@@ -49,115 +36,78 @@ def _parse_interval_seconds(interval_str: str) -> int | None:
             return int(interval_str[:-1]) * 60
     except ValueError:
         pass
-    logger.error(f"Scheduler: cannot parse interval string '{interval_str}'")
+    logger.error("Scheduler: cannot parse interval string '{}'", interval_str)
     return None
 
 
-def _run_profile(profile_id: int) -> None:
-    """Ingest + AI-analysis + notify for a single profile."""
-    logger.info(f"Scheduler: starting run for profile ID {profile_id}")
-    try:
-        from belzakupki_db.session import SessionLocal
-        from belzakupki_db.models import SearchProfile
-        from worker.ingest import (
-            ingest_goszakupki_tenders,
-            ingest_icetrade_tenders,
-            ingest_butb_tenders,
-            ingest_gias_tenders,
-            run_ai_analysis_for_new_matches,
+def enqueue_scheduled_job(
+    queue: Queue,
+    *,
+    key: str,
+    function: str,
+    args: tuple[object, ...] = (),
+) -> bool:
+    """Enqueue one unique bounded job, returning false when it is deferred."""
+    if len(queue) >= MAX_PENDING_JOBS:
+        logger.warning(
+            "Scheduler: queue capacity {} reached; deferring {}",
+            MAX_PENDING_JOBS,
+            key,
         )
-        from worker.notifications import dispatch_notifications
+        return False
 
-        with SessionLocal() as session:
-            profile = (
-                session.query(SearchProfile)
-                .filter(SearchProfile.id == profile_id)
-                .one_or_none()
-            )
-            if not profile or not profile.is_active:
-                logger.warning(
-                    f"Scheduler: profile {profile_id} not active/found — skipping."
-                )
-                return
-
-            # 1. Ingest from all sources
-            logger.info(
-                f"Scheduler: ingesting tenders for profile '{profile.name}' (id={profile_id})"
-            )
-            ingest_goszakupki_tenders(session, profiles=[profile], limit=20)
-            ingest_icetrade_tenders(session, profiles=[profile], limit=20)
-            ingest_butb_tenders(session, profiles=[profile], limit=20)
-            ingest_gias_tenders(session, profiles=[profile], limit=20)
-            session.commit()
-
-            # 2. AI analysis
-            logger.info("Scheduler: running AI analysis for new matches")
-            run_ai_analysis_for_new_matches(session, "goszakupki_by")
-            run_ai_analysis_for_new_matches(session, "icetrade_by")
-            run_ai_analysis_for_new_matches(session, "butb_by")
-            run_ai_analysis_for_new_matches(session, "gias_by")
-            session.commit()
-
-            # 3. Notifications
-            logger.info("Scheduler: dispatching notifications")
-            dispatch_notifications(session)
-            session.commit()
-
-        logger.info(f"Scheduler: profile {profile_id} run finished successfully")
-    except Exception:
-        logger.exception(f"Scheduler: error during run for profile {profile_id}")
-
-
-def _run_results_check() -> None:
-    logger.info("Scheduler: starting periodic results check")
     try:
-        from belzakupki_db.session import SessionLocal
-        from worker.ingest import check_results_for_active_tenders
-
-        with SessionLocal() as session:
-            check_results_for_active_tenders(session)
-    except Exception:
-        logger.exception("Scheduler: error during periodic results check")
-
-
-def _run_global_ingest() -> None:
-    logger.info("Scheduler: starting periodic centralized feed ingest")
-    try:
-        from worker.tasks import run_ingest_task_job
-
-        run_ingest_task_job(tenant_id=None)
-    except Exception:
-        logger.exception("Scheduler: error during periodic centralized feed ingest")
+        queue.enqueue_call(
+            func=function,
+            args=args,
+            job_id=f"belzakupki-scheduled-{key}",
+            unique=True,
+            timeout=JOB_TIMEOUT_SECONDS,
+            result_ttl=0,
+            failure_ttl=FAILED_JOB_TTL_SECONDS,
+            retry=Retry(max=3, interval=[60, 300, 900]),
+        )
+    except DuplicateJobError:
+        logger.debug("Scheduler: {} is already queued or running", key)
+        return False
+    return True
 
 
-def _scheduler_loop() -> None:
-    """Main loop — runs forever inside a daemon thread."""
-    from belzakupki_db.session import SessionLocal
+def run_scheduler(*, redis: Redis | None = None) -> None:
+    """Poll due work forever and submit it to the default RQ queue."""
     from belzakupki_db.models import SearchProfile
+    from belzakupki_db.session import SessionLocal
+
+    connection = redis if redis is not None else Redis.from_url(
+        os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    )
+    queue = Queue("default", connection=connection)
+    last_results_enqueue = 0.0
+    last_global_enqueue = 0.0
 
     logger.info(
-        f"Scheduler thread started (poll_interval={_POLL_INTERVAL}s, "
-        f"max_workers={_MAX_WORKERS})"
+        "Scheduler producer started (poll={}s, max_pending={})",
+        POLL_INTERVAL_SECONDS,
+        MAX_PENDING_JOBS,
     )
-
-    global _last_results_check_time, _last_feed_ingest_time
 
     while True:
         try:
-            # Periodic results check (every 1 hour)
             now_ts = time.time()
-            if now_ts - _last_results_check_time >= 3600:
-                if _tasks.submit("results-check", _run_results_check):
-                    _last_results_check_time = now_ts
-                else:
-                    logger.debug("Scheduler: results check already active or capacity is full")
+            if now_ts - last_results_enqueue >= 3600 and enqueue_scheduled_job(
+                queue,
+                key="results-check",
+                function="worker.tasks.run_results_check_task_job",
+            ):
+                last_results_enqueue = now_ts
 
-            # Periodic centralized feed crawl / ingest (every 30 minutes)
-            if now_ts - _last_feed_ingest_time >= 1800:
-                if _tasks.submit("global-ingest", _run_global_ingest):
-                    _last_feed_ingest_time = now_ts
-                else:
-                    logger.debug("Scheduler: global ingest already active or capacity is full")
+            if now_ts - last_global_enqueue >= 1800 and enqueue_scheduled_job(
+                queue,
+                key="global-ingest",
+                function="worker.tasks.run_ingest_task_job",
+                args=(None,),
+            ):
+                last_global_enqueue = now_ts
 
             with SessionLocal() as session:
                 profiles = (
@@ -167,73 +117,31 @@ def _scheduler_loop() -> None:
                         SearchProfile.schedule_interval.isnot(None),
                         SearchProfile.schedule_interval != "manual",
                     )
-                    .all()
+                    .order_by(SearchProfile.id.asc())
+                    .yield_per(100)
                 )
-
                 now = datetime.now(timezone.utc)
 
                 for profile in profiles:
-                    seconds = _parse_interval_seconds(profile.schedule_interval or "")
-                    if seconds is None:
+                    interval = _parse_interval_seconds(profile.schedule_interval or "")
+                    if interval is None:
                         continue
 
                     last_run = profile.last_run_at
                     if last_run is not None and last_run.tzinfo is None:
                         last_run = last_run.replace(tzinfo=timezone.utc)
-
-                    should_run = (last_run is None) or (
-                        (now - last_run).total_seconds() >= seconds
-                    )
-
-                    if not should_run:
+                    if last_run is not None and (now - last_run).total_seconds() < interval:
                         continue
 
-                    logger.info(
-                        f"Scheduler: profile '{profile.name}' (id={profile.id}) "
-                        f"is due (last_run={profile.last_run_at})"
+                    enqueue_scheduled_job(
+                        queue,
+                        key=f"profile-{profile.id}",
+                        function="worker.tasks.run_profile_task_job",
+                        args=(profile.id,),
                     )
-
-                    if not _tasks.submit(f"profile:{profile.id}", _run_profile, profile.id):
-                        logger.warning(
-                            "Scheduler: profile {} deferred because it is already active "
-                            "or scheduler capacity is full",
-                            profile.id,
-                        )
-                        continue
-
-                    # Stamp only accepted work. Rejected work remains due and is
-                    # retried by the next poll instead of disappearing silently.
-                    profile.last_run_at = now
-                    session.add(profile)
-                    session.commit()
-
+                    # ``last_run_at`` is intentionally untouched here. The RQ
+                    # job stamps it only after the complete pipeline succeeds.
         except Exception:
-            logger.exception("Scheduler: error in poll loop")
+            logger.exception("Scheduler: error in producer poll")
 
-        time.sleep(_POLL_INTERVAL)
-
-
-# Public API ----------------------------------------------------------------
-
-_scheduler_thread: threading.Thread | None = None
-_started = False
-_lock = threading.Lock()
-
-
-def start_scheduler() -> None:
-    """Start the scheduler daemon thread (idempotent — safe to call multiple times)."""
-    global _scheduler_thread, _started
-
-    with _lock:
-        if _started:
-            logger.debug("Scheduler already running — ignoring duplicate start() call.")
-            return
-
-        _scheduler_thread = threading.Thread(
-            target=_scheduler_loop,
-            daemon=True,
-            name="belzakupki-scheduler",
-        )
-        _scheduler_thread.start()
-        _started = True
-        logger.info("Scheduler daemon thread started.")
+        time.sleep(POLL_INTERVAL_SECONDS)
