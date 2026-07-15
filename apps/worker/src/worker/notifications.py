@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender, SearchProfile
 from belzakupki_db.enums import MatchStatus, NotificationStatus
+from worker.resource_limits import positive_int_env
+
+
+NOTIFICATION_BATCH_SIZE = positive_int_env("WORKER_NOTIFICATION_BATCH_SIZE", 50)
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
@@ -120,6 +124,7 @@ def dispatch_notifications(session: Session, tenant_id: int | None = None) -> in
         )
         .where(TenderMatch.status == MatchStatus.NEW)
         .order_by(TenderMatch.created_at.asc())
+        .limit(NOTIFICATION_BATCH_SIZE)
     )
     if tenant_id is not None:
         stmt = stmt.join(TenderMatch.profile).where(SearchProfile.tenant_id == tenant_id)

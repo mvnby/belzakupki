@@ -1,7 +1,19 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   api:
     build: .
     restart: always
+    init: true
+    mem_limit: "${API_MEMORY_LIMIT:-384m}"
+    mem_reservation: "${API_MEMORY_RESERVATION:-192m}"
+    cpus: "${API_CPU_LIMIT:-0.35}"
+    pids_limit: 128
+    logging: *bounded-logging
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     environment:
       APP_ENV: production
@@ -21,6 +33,13 @@ services:
   worker:
     build: .
     restart: always
+    init: true
+    mem_limit: "${WORKER_MEMORY_LIMIT:-1024m}"
+    mem_reservation: "${WORKER_MEMORY_RESERVATION:-512m}"
+    cpus: "${WORKER_CPU_LIMIT:-0.75}"
+    pids_limit: 128
+    stop_grace_period: 30s
+    logging: *bounded-logging
     command: python apps/worker/main.py
     environment:
       APP_ENV: production
@@ -31,6 +50,17 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
       DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
+      SCHEDULER_MAX_WORKERS: "${SCHEDULER_MAX_WORKERS:-1}"
+      SCHEDULER_MAX_PENDING: "${SCHEDULER_MAX_PENDING:-8}"
+      WORKER_AI_BATCH_SIZE: "${WORKER_AI_BATCH_SIZE:-10}"
+      WORKER_ROUTING_BATCH_SIZE: "${WORKER_ROUTING_BATCH_SIZE:-100}"
+      WORKER_RESULTS_BATCH_SIZE: "${WORKER_RESULTS_BATCH_SIZE:-50}"
+      WORKER_NOTIFICATION_BATCH_SIZE: "${WORKER_NOTIFICATION_BATCH_SIZE:-50}"
+      WORKER_OCR_MAX_PAGES: "${WORKER_OCR_MAX_PAGES:-12}"
+      WORKER_PDF_TEXT_MAX_PAGES: "${WORKER_PDF_TEXT_MAX_PAGES:-100}"
+      WORKER_MAX_ATTACHMENTS: "${WORKER_MAX_ATTACHMENTS:-10}"
+      WORKER_EXTRACTED_TEXT_MAX_CHARS: "${WORKER_EXTRACTED_TEXT_MAX_CHARS:-120000}"
+      WORKER_AI_DOCUMENT_CHARS: "${WORKER_AI_DOCUMENT_CHARS:-120000}"
     depends_on:
       db:
         condition: service_healthy
@@ -40,6 +70,11 @@ services:
   db:
     image: postgres:16
     restart: always
+    mem_limit: "${POSTGRES_MEMORY_LIMIT:-768m}"
+    mem_reservation: "${POSTGRES_MEMORY_RESERVATION:-384m}"
+    cpus: "${POSTGRES_CPU_LIMIT:-0.50}"
+    pids_limit: 128
+    logging: *bounded-logging
     environment:
       POSTGRES_USER: belzakupki
       POSTGRES_PASSWORD: belzakupki
@@ -55,6 +90,11 @@ services:
   redis:
     image: redis:7
     restart: always
+    mem_limit: "${REDIS_MEMORY_LIMIT:-192m}"
+    mem_reservation: "${REDIS_MEMORY_RESERVATION:-64m}"
+    cpus: "${REDIS_CPU_LIMIT:-0.15}"
+    pids_limit: 64
+    logging: *bounded-logging
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -h localhost ping || exit 1"]
       interval: 5s
@@ -64,6 +104,11 @@ services:
   caddy:
     image: caddy:2
     restart: always
+    mem_limit: "${CADDY_MEMORY_LIMIT:-128m}"
+    mem_reservation: "${CADDY_MEMORY_RESERVATION:-32m}"
+    cpus: "${CADDY_CPU_LIMIT:-0.15}"
+    pids_limit: 64
+    logging: *bounded-logging
     ports:
       - "80:80"
       - "443:443"
