@@ -5,6 +5,22 @@ import subprocess
 import tempfile
 import io
 from loguru import logger
+from worker.resource_limits import positive_int_env
+
+
+OCR_MAX_PAGES = positive_int_env("WORKER_OCR_MAX_PAGES", 12)
+PDF_TEXT_MAX_PAGES = positive_int_env("WORKER_PDF_TEXT_MAX_PAGES", 100)
+EXTRACTED_TEXT_MAX_CHARS = positive_int_env("WORKER_EXTRACTED_TEXT_MAX_CHARS", 120_000)
+
+
+def _bounded_text(text: str) -> str:
+    if len(text) <= EXTRACTED_TEXT_MAX_CHARS:
+        return text
+    logger.warning(
+        "Extracted text exceeded {} characters and was truncated",
+        EXTRACTED_TEXT_MAX_CHARS,
+    )
+    return text[:EXTRACTED_TEXT_MAX_CHARS]
 
 def extract_text_from_pdf(file_path: str) -> str:
     text = ""
@@ -13,6 +29,13 @@ def extract_text_from_pdf(file_path: str) -> str:
         reader = PdfReader(file_path)
         text_parts = []
         for i, page in enumerate(reader.pages):
+            if i >= PDF_TEXT_MAX_PAGES:
+                logger.warning(
+                    "PDF {} text extraction is capped at {} pages",
+                    file_path,
+                    PDF_TEXT_MAX_PAGES,
+                )
+                break
             page_text = page.extract_text()
             if page_text:
                 text_parts.append(page_text)
@@ -34,22 +57,33 @@ def extract_text_from_pdf(file_path: str) -> str:
                 logger.warning("Tesseract OCR is not installed or not in PATH — skipping OCR.")
                 return text
 
-            doc = fitz.open(file_path)
             ocr_text_parts = []
-            for i in range(len(doc)):
-                page = doc.load_page(i)
-                zoom = 2.0
-                mat = fitz.Matrix(zoom, zoom)
-                pix = page.get_pixmap(matrix=mat)
-                img_data = pix.tobytes("png")
-                img = Image.open(io.BytesIO(img_data))
-                page_ocr = pytesseract.image_to_string(img, lang="rus+bel+eng")
-                if page_ocr.strip():
-                    ocr_text_parts.append(page_ocr)
+            with fitz.open(file_path) as doc:
+                page_count = min(len(doc), OCR_MAX_PAGES)
+                if len(doc) > page_count:
+                    logger.warning(
+                        "PDF {} has {} pages; OCR is capped at {} pages",
+                        file_path,
+                        len(doc),
+                        page_count,
+                    )
+                for i in range(page_count):
+                    page = doc.load_page(i)
+                    mat = fitz.Matrix(2.0, 2.0)
+                    pix = page.get_pixmap(matrix=mat)
+                    img_data = pix.tobytes("png")
+                    with Image.open(io.BytesIO(img_data)) as img:
+                        page_ocr = pytesseract.image_to_string(
+                            img,
+                            lang="rus+bel+eng",
+                        )
+                    del img_data, pix, page
+                    if page_ocr.strip():
+                        ocr_text_parts.append(page_ocr)
 
             if ocr_text_parts:
                 logger.info(f"OCR successfully extracted {len(ocr_text_parts)} pages from PDF {file_path}")
-                return "\n".join(ocr_text_parts)
+                return _bounded_text("\n".join(ocr_text_parts))
         except Exception as ocr_err:
             logger.warning(f"OCR failed for {file_path}: {ocr_err}")
 
@@ -164,17 +198,18 @@ def extract_text_from_archive(file_path: str) -> str:
 def extract_text_from_file(file_path: str) -> str:
     _, ext = os.path.splitext(file_path.lower())
     if ext == ".pdf":
-        return extract_text_from_pdf(file_path)
+        text = extract_text_from_pdf(file_path)
     elif ext == ".docx":
-        return extract_text_from_docx(file_path)
+        text = extract_text_from_docx(file_path)
     elif ext == ".doc":
-        return extract_text_from_doc(file_path)
+        text = extract_text_from_doc(file_path)
     elif ext == ".xlsx":
-        return extract_text_from_xlsx(file_path)
+        text = extract_text_from_xlsx(file_path)
     elif ext == ".xls":
-        return extract_text_from_xls(file_path)
+        text = extract_text_from_xls(file_path)
     elif ext in (".zip", ".rar", ".7z"):
-        return extract_text_from_archive(file_path)
+        text = extract_text_from_archive(file_path)
     else:
         logger.warning(f"Unsupported file extension {ext} for {file_path}")
-        return ""
+        text = ""
+    return _bounded_text(text)

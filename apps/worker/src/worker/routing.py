@@ -3,6 +3,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from belzakupki_db.models import Tender
 from worker.ingest import score_tender, enrich_tender_if_needed
+from worker.resource_limits import positive_int_env
+
+
+ROUTING_BATCH_SIZE = positive_int_env("WORKER_ROUTING_BATCH_SIZE", 100)
 
 def run_local_profile_routing(session: Session) -> int:
     """
@@ -11,7 +15,12 @@ def run_local_profile_routing(session: Session) -> int:
     В конце помечает тендеры как проверенные (is_matched_checked = True).
     Обогащение деталями (lots, contacts, etc.) выполняется в отдельных транзакциях.
     """
-    stmt = select(Tender).where(Tender.is_matched_checked.is_(False))
+    stmt = (
+        select(Tender)
+        .where(Tender.is_matched_checked.is_(False))
+        .order_by(Tender.id.asc())
+        .limit(ROUTING_BATCH_SIZE)
+    )
     unchecked_tenders = list(session.execute(stmt).scalars())
     
     if not unchecked_tenders:

@@ -11,9 +11,12 @@
 ```mermaid
 graph TD
     API[apps/api: FastAPI Server] --> DB_PKG[packages/db: SQLAlchemy models & helpers]
-    Worker[apps/worker: RQ Worker & Daemon Scheduler] --> DB_PKG
+    Scheduler[apps/worker: Scheduler Producer] --> Redis[(Redis / RQ)]
+    Redis --> Worker[apps/worker: Sequential RQ Consumer]
+    Telegram[apps/worker: Telegram Listener] --> DB_PKG
+    Worker --> DB_PKG
     DB_PKG --> PG[(PostgreSQL)]
-    Worker --> Redis[(Redis Queue)]
+    Worker --> Redis
     API --> Redis
 ```
 
@@ -26,9 +29,9 @@ graph TD
    - Предоставляет REST API для веб-панели управления (dashboard).
    - Позволяет настраивать поисковые профили (Search Profiles) и каналы уведомлений (Notification Channels).
    - Отдает статические файлы панели управления (`static/`).
-3. **`apps/worker`**: Фоновый обработчик задач на базе RQ (Redis Queue) со встроенным планировщиком.
+3. **`apps/worker`**: Раздельные процессы планировщика, RQ-обработчика и Telegram listener.
    - Выполняет парсинг госзакупок, скоринг, ИИ-анализ и отправку уведомлений.
-   - Запускает фоновые потоки планировщика (scheduler) и слушателя Telegram-бота для обработки кнопок обратной связи.
+   - Тяжёлые задания выполняет последовательно через RQ; планировщик и слушатель Telegram запускаются отдельными процессами.
 
 ---
 

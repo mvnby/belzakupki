@@ -9,7 +9,7 @@ BelZakupki is a Belarus procurement monitoring service that collects tenders, fi
 - **Stack**: Python 3.14, FastAPI, SQLAlchemy, Alembic, PostgreSQL, Redis, RQ (Redis Queue), pymorphy3, tenacity.
 - **Components**:
   - [apps/api](file:///Users/maksimkorotov/Documents/belzakupki/apps/api): FastAPI web server exposing REST endpoints and serving the dashboard.
-  - [apps/worker](file:///Users/maksimkorotov/Documents/belzakupki/apps/worker): RQ worker processing ingest, scoring, and notification jobs, with an integrated background scheduler thread.
+  - [apps/worker](file:///Users/maksimkorotov/Documents/belzakupki/apps/worker): separate RQ consumer, scheduler producer, and Telegram listener processes for ingest, scoring, and notification jobs.
   - [packages/db](file:///Users/maksimkorotov/Documents/belzakupki/packages/db): SQLAlchemy models, migrations (Alembic), and session helpers.
 
 ## Agent Rules & Guidelines

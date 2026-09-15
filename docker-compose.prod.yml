@@ -1,7 +1,19 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   api:
     build: .
     restart: always
+    init: true
+    mem_limit: "${API_MEMORY_LIMIT:-256m}"
+    mem_reservation: "${API_MEMORY_RESERVATION:-128m}"
+    cpus: "${API_CPU_LIMIT:-0.25}"
+    pids_limit: 128
+    logging: *bounded-logging
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     environment:
       APP_ENV: production
@@ -21,6 +33,13 @@ services:
   worker:
     build: .
     restart: always
+    init: true
+    mem_limit: "${WORKER_MEMORY_LIMIT:-768m}"
+    mem_reservation: "${WORKER_MEMORY_RESERVATION:-384m}"
+    cpus: "${WORKER_CPU_LIMIT:-0.75}"
+    pids_limit: 128
+    stop_grace_period: 30s
+    logging: *bounded-logging
     command: python apps/worker/main.py
     environment:
       APP_ENV: production
@@ -31,15 +50,73 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
       DEEPSEEK_TOKEN: "${DEEPSEEK_TOKEN}"
+      WORKER_AI_BATCH_SIZE: "${WORKER_AI_BATCH_SIZE:-10}"
+      WORKER_ROUTING_BATCH_SIZE: "${WORKER_ROUTING_BATCH_SIZE:-100}"
+      WORKER_RESULTS_BATCH_SIZE: "${WORKER_RESULTS_BATCH_SIZE:-50}"
+      WORKER_NOTIFICATION_BATCH_SIZE: "${WORKER_NOTIFICATION_BATCH_SIZE:-50}"
+      WORKER_OCR_MAX_PAGES: "${WORKER_OCR_MAX_PAGES:-12}"
+      WORKER_PDF_TEXT_MAX_PAGES: "${WORKER_PDF_TEXT_MAX_PAGES:-100}"
+      WORKER_MAX_ATTACHMENTS: "${WORKER_MAX_ATTACHMENTS:-10}"
+      WORKER_EXTRACTED_TEXT_MAX_CHARS: "${WORKER_EXTRACTED_TEXT_MAX_CHARS:-120000}"
+      WORKER_AI_DOCUMENT_CHARS: "${WORKER_AI_DOCUMENT_CHARS:-120000}"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  scheduler:
+    build: .
+    restart: always
+    init: true
+    command: python apps/worker/scheduler_main.py
+    mem_limit: "${SCHEDULER_MEMORY_LIMIT:-96m}"
+    mem_reservation: "${SCHEDULER_MEMORY_RESERVATION:-48m}"
+    cpus: "${SCHEDULER_CPU_LIMIT:-0.10}"
+    pids_limit: 64
+    logging: *bounded-logging
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      REDIS_URL: redis://redis:6379/0
+      SCHEDULER_POLL_INTERVAL: "${SCHEDULER_POLL_INTERVAL:-60}"
+      SCHEDULER_MAX_PENDING: "${SCHEDULER_MAX_PENDING:-8}"
+      SCHEDULER_JOB_TIMEOUT: "${SCHEDULER_JOB_TIMEOUT:-3600}"
+      SCHEDULER_FAILED_JOB_TTL: "${SCHEDULER_FAILED_JOB_TTL:-300}"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  telegram:
+    build: .
+    restart: "on-failure:5"
+    init: true
+    command: python apps/worker/telegram_main.py
+    mem_limit: "${TELEGRAM_MEMORY_LIMIT:-128m}"
+    mem_reservation: "${TELEGRAM_MEMORY_RESERVATION:-64m}"
+    cpus: "${TELEGRAM_CPU_LIMIT:-0.10}"
+    pids_limit: 64
+    logging: *bounded-logging
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+    depends_on:
+      db:
+        condition: service_healthy
+
   db:
     image: postgres:16
     restart: always
+    mem_limit: "${POSTGRES_MEMORY_LIMIT:-384m}"
+    mem_reservation: "${POSTGRES_MEMORY_RESERVATION:-256m}"
+    cpus: "${POSTGRES_CPU_LIMIT:-0.35}"
+    pids_limit: 128
+    logging: *bounded-logging
     environment:
       POSTGRES_USER: belzakupki
       POSTGRES_PASSWORD: belzakupki
@@ -55,6 +132,11 @@ services:
   redis:
     image: redis:7
     restart: always
+    mem_limit: "${REDIS_MEMORY_LIMIT:-96m}"
+    mem_reservation: "${REDIS_MEMORY_RESERVATION:-32m}"
+    cpus: "${REDIS_CPU_LIMIT:-0.10}"
+    pids_limit: 64
+    logging: *bounded-logging
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -h localhost ping || exit 1"]
       interval: 5s
@@ -64,6 +146,11 @@ services:
   caddy:
     image: caddy:2
     restart: always
+    mem_limit: "${CADDY_MEMORY_LIMIT:-64m}"
+    mem_reservation: "${CADDY_MEMORY_RESERVATION:-16m}"
+    cpus: "${CADDY_CPU_LIMIT:-0.10}"
+    pids_limit: 64
+    logging: *bounded-logging
     ports:
       - "80:80"
       - "443:443"

@@ -79,7 +79,8 @@ def test_pdf_ocr_fallback(mock_img_open, mock_tess_ver, mock_image_to_string, mo
     mock_fitz_doc = MagicMock()
     mock_fitz_doc.__len__.return_value = 1
     mock_fitz_doc.load_page.return_value = mock_fitz_page
-    mock_fitz_open.return_value = mock_fitz_doc
+    mock_fitz_open.return_value.__enter__.return_value = mock_fitz_doc
+    mock_fitz_open.return_value.__exit__.return_value = False
     
     # Mock PIL Image open
     mock_img_open.return_value = MagicMock()
@@ -89,3 +90,35 @@ def test_pdf_ocr_fallback(mock_img_open, mock_tess_ver, mock_image_to_string, mo
     
     res = extract_text_from_pdf("scanned.pdf")
     assert "OCR Decoded Text Content" in res
+
+
+@patch("worker.analyzer.text_extractor.OCR_MAX_PAGES", 2)
+@patch("pypdf.PdfReader")
+@patch("fitz.open")
+@patch("pytesseract.image_to_string")
+@patch("pytesseract.get_tesseract_version")
+@patch("PIL.Image.open")
+def test_pdf_ocr_respects_page_cap(
+    mock_img_open,
+    mock_tess_ver,
+    mock_image_to_string,
+    mock_fitz_open,
+    mock_pdf_reader,
+):
+    mock_page = MagicMock()
+    mock_page.extract_text.return_value = ""
+    mock_pdf_reader.return_value.pages = [mock_page]
+    mock_tess_ver.return_value = "5.0.0"
+
+    mock_fitz_doc = MagicMock()
+    mock_fitz_doc.__len__.return_value = 100
+    mock_fitz_page = MagicMock()
+    mock_fitz_page.get_pixmap.return_value.tobytes.return_value = b"png"
+    mock_fitz_doc.load_page.return_value = mock_fitz_page
+    mock_fitz_open.return_value.__enter__.return_value = mock_fitz_doc
+    mock_image_to_string.return_value = "page"
+
+    extract_text_from_pdf("large-scan.pdf")
+
+    assert mock_fitz_doc.load_page.call_count == 2
+    assert mock_image_to_string.call_count == 2

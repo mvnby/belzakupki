@@ -11,12 +11,13 @@ import httpx
 from loguru import logger
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSource, TenderResult
 from belzakupki_db.enums import MatchStatus
 from worker.scoring import score_text
+from worker.resource_limits import positive_int_env
 from worker.sources.goszakupki_by import (
     BASE_URL,
     fetch_hvac_vitebsk_tenders,
@@ -26,6 +27,10 @@ from worker.sources.goszakupki_by import (
 
 SOURCE_CODE = "goszakupki_by"
 SOURCE_NAME = "goszakupki.by"
+AI_ANALYSIS_BATCH_SIZE = positive_int_env("WORKER_AI_BATCH_SIZE", 10)
+RESULTS_CHECK_BATCH_SIZE = positive_int_env("WORKER_RESULTS_BATCH_SIZE", 50)
+AI_DOCUMENT_TEXT_LIMIT = positive_int_env("WORKER_AI_DOCUMENT_CHARS", 120_000)
+ATTACHMENTS_PER_TENDER_LIMIT = positive_int_env("WORKER_MAX_ATTACHMENTS", 10)
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,18 @@ class IngestStats:
     created: int
     updated: int
     matches: int
+
+
+@dataclass(frozen=True)
+class AIAnalysisBatch:
+    selected_count: int
+    last_selected_id: int | None
+
+
+@dataclass(frozen=True)
+class ResultsCheckBatch:
+    selected_count: int
+    last_selected_id: int | None
 
 
 def content_hash(value: dict[str, Any]) -> str:
@@ -560,17 +577,33 @@ def ingest_gias_tenders(
     )
 
 
-def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
+def get_pending_ai_analysis_max_id(session: Session, source_code: str) -> int | None:
+    """Return the upper ID boundary for one stable pending-analysis snapshot."""
+    stmt = (
+        select(func.max(TenderMatch.id))
+        .join(TenderMatch.tender)
+        .join(Tender.source)
+        .where(
+            TenderSource.code == source_code,
+            TenderMatch.status == "new",
+            TenderMatch.ai_relevance.is_(None),
+        )
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def run_ai_analysis_for_new_matches(
+    session: Session,
+    source_code: str,
+    *,
+    after_id: int = 0,
+    through_id: int | None = None,
+) -> AIAnalysisBatch:
     """Запускает двухэтапную ИИ-проверку релевантности тендеров через DeepSeek API.
 
     Этап 1: Экспресс-анализ метаданных (название, описание, заказчик). Если не подходит -> отклонение.
     Этап 2: Скачивание вложений (.pdf, .docx, .xlsx), извлечение текста и глубокий анализ требований/бюджета.
     """
-    token = os.getenv("DEEPSEEK_TOKEN")
-    if not token or token == "your-deepseek-token":
-        logger.info("DEEPSEEK_TOKEN not configured. Skipping AI analysis.")
-        return
-
     # Find matches that are 'new' and don't have AI relevance set yet
     stmt = (
         select(TenderMatch)
@@ -580,11 +613,43 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
             TenderSource.code == source_code,
             TenderMatch.status == "new",
             TenderMatch.ai_relevance.is_(None),
+            TenderMatch.id > after_id,
         )
+        .order_by(TenderMatch.id.asc())
+        .limit(AI_ANALYSIS_BATCH_SIZE)
     )
+    if through_id is not None:
+        stmt = stmt.where(TenderMatch.id <= through_id)
     matches = list(session.execute(stmt).scalars())
     if not matches:
-        return
+        return AIAnalysisBatch(selected_count=0, last_selected_id=None)
+
+    last_selected_id = matches[-1].id
+
+    token = os.getenv("DEEPSEEK_TOKEN")
+    if not token or token == "your-deepseek-token":
+        logger.warning(
+            "DEEPSEEK_TOKEN is not configured; explicitly approving {} "
+            "morphology-matched rows in this bounded batch",
+            len(matches),
+        )
+        for match in matches:
+            match.ai_relevance = True
+            match.ai_analysis = {
+                "relevant": True,
+                "bypassed": True,
+                "reason": "ai_not_configured",
+                "explanation": (
+                    "ИИ-анализ отключён: использован результат "
+                    "морфологического скоринга"
+                ),
+            }
+            session.add(match)
+        session.flush()
+        return AIAnalysisBatch(
+            selected_count=len(matches),
+            last_selected_id=last_selected_id,
+        )
 
     logger.info(f"Running AI analysis for {len(matches)} new matches from source '{source_code}'...")
 
@@ -610,7 +675,9 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         fetch_tender_attachments = lambda url: []
     else:
         logger.error(f"Unknown source code: {source_code}")
-        return
+        if _temp_dir_managed:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return AIAnalysisBatch(selected_count=0, last_selected_id=None)
 
     from belzakupki_db.presets import PRESETS
 
@@ -688,7 +755,16 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                 text_content = tender.description or tender.title
             else:
                 text_parts = []
-                for idx, att in enumerate(attachments):
+                attachments_to_process = attachments[:ATTACHMENTS_PER_TENDER_LIMIT]
+                if len(attachments) > len(attachments_to_process):
+                    logger.warning(
+                        "Tender {} has {} attachments; processing is capped at {}",
+                        tender.id,
+                        len(attachments),
+                        ATTACHMENTS_PER_TENDER_LIMIT,
+                    )
+                accumulated_text_chars = 0
+                for idx, att in enumerate(attachments_to_process):
                     file_name = att["name"]
                     file_url = att["url"]
 
@@ -736,7 +812,19 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
 
                         file_text = extract_text_from_file(local_path)
                         if file_text:
-                            text_parts.append(f"--- File: {file_name} ---\n{file_text}")
+                            heading = f"--- File: {file_name} ---\n"
+                            remaining_chars = max(
+                                AI_DOCUMENT_TEXT_LIMIT
+                                - accumulated_text_chars
+                                - len(heading),
+                                0,
+                            )
+                            if remaining_chars:
+                                bounded_file_text = file_text[:remaining_chars]
+                                text_parts.append(f"{heading}{bounded_file_text}")
+                                accumulated_text_chars += len(heading) + len(
+                                    bounded_file_text
+                                )
                             
                             from belzakupki_db.models import TenderDocument
                             # Save to TenderDocument, update if already exists
@@ -760,7 +848,7 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
                         if os.path.exists(local_path):
                             os.remove(local_path)
 
-                text_content = "\n\n".join(text_parts)
+                text_content = "\n\n".join(text_parts)[:AI_DOCUMENT_TEXT_LIMIT]
 
             # Analyze
             analysis = analyze_tender_relevance(
@@ -798,8 +886,36 @@ def run_ai_analysis_for_new_matches(session: Session, source_code: str) -> None:
         except Exception:
             pass
 
+    return AIAnalysisBatch(
+        selected_count=len(matches),
+        last_selected_id=last_selected_id,
+    )
 
-def check_results_for_active_tenders(session: Session) -> None:
+
+def get_pending_results_max_id(session: Session) -> int | None:
+    """Return the upper ID boundary for one pending results snapshot."""
+    from datetime import datetime, timezone
+
+    completed_statuses = [
+        "closed", "canceled", "manque", "завершен", "отменен",
+        "не состоялся", "признан несостоявшимся", "отменена",
+    ]
+    stmt = (
+        select(func.max(Tender.id))
+        .outerjoin(TenderResult)
+        .where(TenderResult.id == None)
+        .where(Tender.deadline_at < datetime.now(timezone.utc))
+        .where(Tender.status.notin_(completed_statuses))
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def check_results_for_active_tenders(
+    session: Session,
+    *,
+    after_id: int = 0,
+    through_id: int | None = None,
+) -> ResultsCheckBatch:
     """Проверяет результаты прошедших тендеров, у которых наступил дедлайн, и обновляет их статусы."""
     from datetime import datetime, timezone
     import worker.sources.goszakupki_by as gk
@@ -816,10 +932,19 @@ def check_results_for_active_tenders(session: Session) -> None:
         .where(TenderResult.id == None)
         .where(Tender.deadline_at < now)
         .where(Tender.status.notin_(completed_statuses))
+        .where(Tender.id > after_id)
+        .order_by(Tender.id.asc())
+        .limit(RESULTS_CHECK_BATCH_SIZE)
     )
+    if through_id is not None:
+        stmt = stmt.where(Tender.id <= through_id)
     
     active_tenders = session.scalars(stmt).all()
     logger.info(f"Found {len(active_tenders)} active expired tenders to check for results.")
+    if not active_tenders:
+        return ResultsCheckBatch(selected_count=0, last_selected_id=None)
+
+    last_selected_id = active_tenders[-1].id
     
     for tender in active_tenders:
         logger.info(f"Checking results for tender {tender.id} ({tender.url})...")
@@ -871,4 +996,7 @@ def check_results_for_active_tenders(session: Session) -> None:
             logger.error(f"Failed to check results for tender {tender.id}: {e}")
             
     session.commit()
-
+    return ResultsCheckBatch(
+        selected_count=len(active_tenders),
+        last_selected_id=last_selected_id,
+    )
