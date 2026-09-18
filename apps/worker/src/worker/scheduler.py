@@ -15,6 +15,7 @@ from rq import Queue, Retry
 from rq.exceptions import DuplicateJobError
 
 from worker.resource_limits import positive_int_env
+from worker.results_progress import results_check_due
 
 
 POLL_INTERVAL_SECONDS = positive_int_env("SCHEDULER_POLL_INTERVAL", 60)
@@ -82,7 +83,6 @@ def run_scheduler(*, redis: Redis | None = None) -> None:
         os.getenv("REDIS_URL", "redis://localhost:6379/0")
     )
     queue = Queue("default", connection=connection)
-    last_results_enqueue = 0.0
     last_global_enqueue = 0.0
 
     logger.info(
@@ -95,13 +95,6 @@ def run_scheduler(*, redis: Redis | None = None) -> None:
         try:
             connection.set("belzakupki:scheduler:heartbeat", "1", ex=max(180, POLL_INTERVAL_SECONDS * 3))
             now_ts = time.time()
-            if now_ts - last_results_enqueue >= 3600 and enqueue_scheduled_job(
-                queue,
-                key="results-check",
-                function="worker.tasks.run_results_check_task_job",
-            ):
-                last_results_enqueue = now_ts
-
             if now_ts - last_global_enqueue >= 1800 and enqueue_scheduled_job(
                 queue,
                 key="global-ingest",
@@ -142,6 +135,15 @@ def run_scheduler(*, redis: Redis | None = None) -> None:
                     )
                     # ``last_run_at`` is intentionally untouched here. The RQ
                     # job stamps it only after the complete pipeline succeeds.
+            # Maintenance goes behind fresh collection and profile work. An
+            # unfinished scan continues on each poll instead of monopolizing
+            # one worker job or waiting an hour between every small chunk.
+            if results_check_due(connection, now_ts):
+                enqueue_scheduled_job(
+                    queue,
+                    key="results-check",
+                    function="worker.tasks.run_results_check_task_job",
+                )
         except Exception:
             logger.exception("Scheduler: error in producer poll")
 

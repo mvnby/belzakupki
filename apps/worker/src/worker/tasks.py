@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from loguru import logger
 from redis import Redis
 
@@ -16,8 +17,14 @@ from worker.ingest import (
     run_ai_analysis_for_new_matches,
     check_results_for_active_tenders,
 )
+from worker.resource_limits import positive_int_env
+from worker.results_progress import (
+    read_results_progress, save_results_progress, RESULTS_SCAN_INTERVAL_SECONDS,
+)
 from worker.routing import run_local_profile_routing
 from worker.notifications import dispatch_notifications
+
+RESULTS_JOB_BATCH_SIZE = positive_int_env("WORKER_RESULTS_JOB_BATCH_SIZE", 5)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -122,9 +129,41 @@ def run_profile_task_job(profile_id: int) -> None:
 
 
 def run_results_check_task_job() -> None:
-    """RQ job: process one bounded batch of completed tender results."""
+    """Attempt at most one small chunk; persist its cursor only after DB commit."""
+    redis = get_redis()
+    progress = read_results_progress(redis)
+    if progress["next_scan_at"] > time.time():
+        return
     with SessionLocal() as session:
-        _drain_results_check(session)
+        if progress["through_id"] is None:
+            progress["through_id"] = get_pending_results_max_id(session)
+            progress["after_id"] = 0
+            # Freeze the upper boundary before work; retries use the same scan.
+            save_results_progress(redis, progress)
+        if progress["through_id"] is None:
+            progress["next_scan_at"] = int(time.time()) + RESULTS_SCAN_INTERVAL_SECONDS
+            save_results_progress(redis, progress)
+            return
+        batch = check_results_for_active_tenders(
+            session,
+            after_id=progress["after_id"],
+            through_id=progress["through_id"],
+            limit=RESULTS_JOB_BATCH_SIZE,
+        )
+        # The checker commits its writes; this explicit commit also establishes
+        # the task's ordering contract before any cursor advancement.
+        session.commit()
+        if batch.selected_count and (
+            batch.last_selected_id is None
+            or batch.last_selected_id <= progress["after_id"]
+        ):
+            raise RuntimeError("results-check cursor did not advance")
+        if batch.selected_count == 0 or batch.last_selected_id >= progress["through_id"]:
+            progress = {"after_id": 0, "through_id": None,
+                        "next_scan_at": int(time.time()) + RESULTS_SCAN_INTERVAL_SECONDS}
+        else:
+            progress["after_id"] = batch.last_selected_id
+        save_results_progress(redis, progress)
 
 def run_ingest_task_job(tenant_id: int | None = None) -> None:
     """RQ Job: Ingests new tenders from all sources for the active profiles of a tenant."""
