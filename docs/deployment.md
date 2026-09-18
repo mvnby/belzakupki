@@ -23,7 +23,10 @@ build. The script waits up to 60 seconds for graceful exit; a busy worker aborts
 the rollout before the build and is never force-killed. One release-tagged
 image (`belzakupki:<SHA>`) is built and shared by all application services, then
 migrations run and API, worker, scheduler and Telegram start.
-The resolved API secret is validated before services are stopped.
+The resolved API secret is validated before services are stopped. Migration
+commands explicitly disable stdin attachment; the local deploy also requires
+the remote completion marker emitted after all runtime probes, so an early
+zero-status shell exit cannot be mistaken for a successful rollout.
 If a build or migration fails, previously running containers are restarted when
 still present. Missing/replaced containers and restoration failures are reported;
 a private `deploy-recovery.*` record remains for operator recovery. After
@@ -62,3 +65,29 @@ document first; spreadsheet rows have a separate iteration limit. Binary Word
 conversion has a 10-second deadline and bounded stdout. Native parsers and a
 single PDF page can still allocate before returning text; service memory limits
 remain the final containment boundary.
+
+## Redis durability migration
+
+Redis uses an external Docker volume selected by `REDIS_DATA_VOLUME`
+(default `belzakupki_redis_data`), with AOF enabled, `appendfsync everysec` and
+`maxmemory-policy noeviction`. The volume survives Compose removal. AOF everysec
+limits the usual sudden-crash loss window to approximately one second; it is not
+a replacement for backups.
+
+For an existing deployment, preserve the **exact current** Docker volume mounted
+at Redis `/data`, even when its name is an anonymous hash. Put that name in
+`/opt/belzakupki/.env` as `REDIS_DATA_VOLUME`. Do not attach a new empty named
+volume. Before recreating Redis, enable AOF on the existing running instance
+(`CONFIG SET appendonly yes`) and wait until `INFO persistence` reports
+`aof_enabled:1`, `aof_rewrite_in_progress:0`, `aof_rewrite_scheduled:0`,
+`aof_last_bgrewrite_status:ok`, and `aof_last_write_status:ok`. Take a backup and
+coordinate this migration under the shared-host deployment lock. Starting Redis
+with `appendonly yes` before its existing data has been written to AOF can ignore
+the old RDB data, so the order is essential.
+
+The deploy script checks the actual mount and AOF readiness before stopping any
+service. A mismatched volume, missing mount, stopped Redis or incomplete/failed
+AOF rewrite aborts the rollout. For a fresh installation without a Redis
+container, it creates the selected external volume under the deployment lock;
+Docker retains that volume on subsequent deployments. Moving data to a different
+volume is a separate explicit migration, never an automatic deploy action.

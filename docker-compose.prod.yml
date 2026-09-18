@@ -140,6 +140,9 @@ services:
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
     restart: always
     mem_limit: "${REDIS_MEMORY_LIMIT:-96m}"
     mem_reservation: "${REDIS_MEMORY_RESERVATION:-32m}"
@@ -171,6 +174,9 @@ services:
       - api
 
 volumes:
+  redis_data:
+    external: true
+    name: "${REDIS_DATA_VOLUME:-belzakupki_redis_data}"
   db_data:
   caddy_data:
   caddy_config:
