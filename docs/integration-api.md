@@ -91,3 +91,10 @@ heartbeat and a live RQ worker heartbeat. A deliberate deployment pause returns
 503 readiness while the read API remains usable. These probes prove process
 availability, not successful collection from every upstream source; monitor
 latest successful tender ingest separately.
+
+When several profiles match the same procurement, retain their independent
+states keyed by `match.id`, then aggregate those states under the procurement's
+`tenant + source + external_id` key. A rejected match in one profile must not
+replace an eligible confirmed match in another. Recompute aggregate eligibility
+from the retained matches using the consumer's configured relevance policy;
+do not sequentially overwrite one tender-level relevance field with each match.
