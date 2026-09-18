@@ -91,3 +91,24 @@ AOF rewrite aborts the rollout. For a fresh installation without a Redis
 container, it creates the selected external volume under the deployment lock;
 Docker retains that volume on subsequent deployments. Moving data to a different
 volume is a separate explicit migration, never an automatic deploy action.
+
+## Results maintenance fairness
+
+Scheduled results checks process at most `WORKER_RESULTS_JOB_BATCH_SIZE` tenders
+(default 5) per RQ job. Progress (`after_id`, frozen `through_id`, next scan time)
+lives in the persistent Redis key `belzakupki:results-check:progress:v1` without
+a TTL. The database commits before cursor advancement. A crash between commit
+and Redis checkpoint can repeat the last chunk safely; completed result writes
+are idempotent, and no-result rows also advance after a committed attempt.
+
+The scheduler queues fresh ingestion and due profiles before results maintenance.
+An unfinished snapshot resumes on each scheduler poll; when it ends, a new scan
+starts after a one-hour cooldown. The deterministic unique scheduled job ID
+prevents concurrent maintenance jobs. Do not enqueue the same callable under
+arbitrary IDs while a scheduled maintenance job is active.
+
+This is a row-count bound, not a hard wall-clock guarantee: each source's HTTP
+requests and retries can still delay a chunk. Monitor actual chunk duration and
+upstream failures; reducing the count reduces the maximum number of slow lookups
+in a job. The old complete-snapshot drain helper remains for explicit maintenance
+use, but the scheduler no longer calls it.

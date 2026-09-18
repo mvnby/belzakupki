@@ -915,12 +915,16 @@ def check_results_for_active_tenders(
     *,
     after_id: int = 0,
     through_id: int | None = None,
+    limit: int | None = None,
 ) -> ResultsCheckBatch:
     """Проверяет результаты прошедших тендеров, у которых наступил дедлайн, и обновляет их статусы."""
     from datetime import datetime, timezone
     import worker.sources.goszakupki_by as gk
     import worker.sources.icetrade_by as it
 
+    batch_limit = RESULTS_CHECK_BATCH_SIZE if limit is None else limit
+    if batch_limit < 1:
+        raise ValueError("Results batch limit must be positive")
     now = datetime.now(timezone.utc)
     
     # Ищем тендеры с прошедшим дедлайном, которые не находятся в конечном статусе
@@ -934,7 +938,7 @@ def check_results_for_active_tenders(
         .where(Tender.status.notin_(completed_statuses))
         .where(Tender.id > after_id)
         .order_by(Tender.id.asc())
-        .limit(RESULTS_CHECK_BATCH_SIZE)
+        .limit(batch_limit)
     )
     if through_id is not None:
         stmt = stmt.where(Tender.id <= through_id)
