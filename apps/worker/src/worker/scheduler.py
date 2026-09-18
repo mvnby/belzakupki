@@ -93,6 +93,7 @@ def run_scheduler(*, redis: Redis | None = None) -> None:
 
     while True:
         try:
+            connection.set("belzakupki:scheduler:heartbeat", "1", ex=max(180, POLL_INTERVAL_SECONDS * 3))
             now_ts = time.time()
             if now_ts - last_results_enqueue >= 3600 and enqueue_scheduled_job(
                 queue,

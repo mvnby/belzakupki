@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-os.environ["API_SECRET_KEY"] = "test-secret-key-for-unit-testing"
+os.environ["API_SECRET_KEY"] = "test-secret-key-for-unit-testing-at-least-32"
 
 import pytest
 from fastapi.testclient import TestClient

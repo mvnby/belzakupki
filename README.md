@@ -1,6 +1,13 @@
 # belzakupki
 Сервис мониторинга закупок Беларуси: сбор тендеров, фильтрация по нишам, скоринг релевантности и уведомления в Telegram/email.
 
+## Integration and production
+
+See [Integration API v1](docs/integration-api.md) for the scoped read API and
+[deployment](docs/deployment.md) for reviewed releases and resource-safe rollout.
+Set a random `API_SECRET_KEY` of at least 32 characters before starting the API;
+anonymous access to management endpoints is never enabled.
+
 ## Local backend with Docker
 
 ```bash
@@ -8,7 +15,7 @@ docker compose build
 docker compose up -d db redis
 docker compose run --rm api alembic upgrade head
 docker compose run --rm api belzakupki-seed
-docker compose up -d api worker
+docker compose up -d api worker scheduler telegram
 ```
 
 Run the first ingest manually:
@@ -35,8 +42,8 @@ The Docker setup defaults `GOSZAKUPKI_VERIFY_SSL=false` because
 Set it to `true` in environments where the certificate chain verifies cleanly.
 
 The API is available at <http://localhost:8008/healthz> by default. Tender data
-can be read from <http://localhost:8008/tenders?limit=20> and scored matches
-from <http://localhost:8008/matches?limit=20>. Set
+can be read from <http://localhost:8008/api/tenders?limit=20> and scored matches
+from <http://localhost:8008/api/matches?limit=20>. Set
 `API_PORT` to expose it on a different host port. If local Postgres or Redis
 ports are already busy, set `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT`.
 
@@ -74,7 +81,7 @@ internal disk space. A safe first cleanup is:
 ```bash
 docker builder prune -f
 docker compose restart db
-docker compose up -d api worker
+docker compose up -d api worker scheduler telegram
 ```
 
 If it happens again, remove unused Docker images as well:

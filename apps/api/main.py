@@ -1,12 +1,10 @@
 from fastapi import Depends, FastAPI, HTTPException, Query, BackgroundTasks, Response, Security
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.security import OAuth2PasswordBearer
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import os
 import threading
-import jwt
 from redis import Redis
 from rq import Queue
 from datetime import datetime, timedelta, timezone
@@ -65,6 +63,7 @@ async def lifespan(app: FastAPI):
 
     The scheduler lives in the worker process (worker/scheduler.py).
     """
+    validate_security_config()
     yield
 
 
@@ -74,115 +73,18 @@ from fastapi.staticfiles import StaticFiles
 # Mount static files under /assets for compiled Vue app
 app.mount("/assets", StaticFiles(directory="apps/api/static/assets", check_dir=False), name="assets")
 
+from apps.api.health import router as health_router
+from apps.api.opportunities import router as opportunities_router
+app.include_router(health_router)
+app.include_router(opportunities_router)
+
 # --- Аутентификация ---
 
-JWT_SECRET = os.getenv("API_SECRET_KEY", "fallback-secret-for-dev-use-only-1234567890")
-JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 часа
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
-
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
-def get_current_user(
-    token: str | None = Depends(oauth2_scheme),
-    session: Session = Depends(get_session)
-) -> User:
-    """Извлекает текущего пользователя из JWT токена.
-
-    Если авторизация не пройдена или токен отсутствует, в режиме разработки 
-    (когда API_SECRET_KEY не задан в окружении) возвращает первого пользователя 
-    из базы данных для обратной совместимости.
-    """
-    secret = os.getenv("API_SECRET_KEY")
-    
-    if not secret and not token:
-        first_user = session.query(User).first()
-        if not first_user:
-            # Создаем на лету дефолтного пользователя, если база не была засеяна
-            tenant = session.query(Tenant).first()
-            if not tenant:
-                tenant = Tenant(name="ООО Ромашка")
-                session.add(tenant)
-                session.flush()
-            first_user = User(
-                tenant_id=tenant.id,
-                email="admin@belzakupki.by",
-                hashed_password=hash_password("adminpass"),
-                full_name="Администратор",
-                role="admin"
-            )
-            session.add(first_user)
-            session.commit()
-            session.refresh(first_user)
-        return first_user
-        
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-        
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Could not validate credentials")
-        
-    user = session.query(User).filter(User.email == email).one_or_none()
-    if user is None:
-        raise HTTPException(status_code=401, detail="User not found")
-    if not user.is_active:
-        raise HTTPException(status_code=401, detail="User is inactive")
-    return user
-
-
-def get_current_tenant(
-    current_user: User = Depends(get_current_user)
-) -> Tenant:
-    """Извлекает организацию (tenant) текущего пользователя."""
-    return current_user.tenant
-
-
-def get_optional_current_user(
-    token: str | None = Depends(oauth2_scheme),
-    session: Session = Depends(get_session)
-) -> User | None:
-    """Опционально извлекает пользователя. Возвращает None, если авторизация отсутствует."""
-    if not token:
-        return None
-    try:
-        return get_current_user(token, session)
-    except HTTPException:
-        return None
-
-
-def get_optional_current_tenant(
-    current_user: User | None = Depends(get_optional_current_user)
-) -> Tenant | None:
-    """Опционально возвращает организацию (tenant) пользователя."""
-    return current_user.tenant if current_user else None
-
-
-def get_current_admin(
-    current_user: User = Depends(get_current_user)
-) -> User:
-    """Гарантирует, что текущий пользователь является администратором."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Доступ запрещен. Требуются права администратора."
-        )
-    return current_user
-
+from apps.api.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_current_user,
+    get_current_tenant, get_optional_current_tenant, get_current_admin,
+    oauth2_scheme, validate_security_config,
+)
 
 
 # --- Redis и RQ Очереди (Background Jobs) ---
@@ -341,7 +243,7 @@ def login_user(data: UserLogin, session: Session = Depends(get_session)):
     user = session.query(User).filter(User.email == data.email).one_or_none()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
-    if not user.is_active:
+    if not user.is_active or not user.tenant.is_active:
         raise HTTPException(status_code=400, detail="User account is deactivated")
 
     access_token = create_access_token(
