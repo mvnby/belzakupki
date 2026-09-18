@@ -33,13 +33,14 @@ def test_extract_text_from_archive_zip():
             assert "Parsed DOCX Content" in res
             assert "unsupported.txt" not in res
 
-@patch("subprocess.run")
-def test_extract_text_from_doc_binary(mock_run):
-    mock_run.return_value = MagicMock(stdout="Binary Word Document Content", returncode=0)
-    
+@patch("subprocess.Popen")
+def test_extract_text_from_doc_binary(mock_popen):
+    process = mock_popen.return_value.__enter__.return_value
+    process.stdout.read.return_value = b"Binary Word Document Content"
+    process.poll.return_value = 0
     res = extract_text_from_doc("test.doc")
     assert res == "Binary Word Document Content"
-    mock_run.assert_called_once()
+    process.stdout.read.assert_called_once_with(120_000 * 4)
 
 @patch("xlrd.open_workbook")
 def test_extract_text_from_xls_binary(mock_open):

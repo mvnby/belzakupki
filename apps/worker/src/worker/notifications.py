@@ -116,6 +116,10 @@ def _dispatch_notification_batch(
     - Фиксирует факты отправки в таблице notification_logs.
     - Переводит статус совпадения в 'processed'.
     """
+    if os.getenv("WORKER_NOTIFICATIONS_ENABLED", "true").lower() not in {"1", "true", "yes"}:
+        logger.info("Notification delivery is disabled by runtime configuration")
+        return 0, 0
+
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     
     # Находим все совпадения со статусом 'new'

@@ -119,8 +119,8 @@ TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 # Настройки ИИ (DeepSeek)
 DEEPSEEK_TOKEN=your-deepseek-api-key
 
-# Фронтенд аутентификация (опционально)
-API_SECRET_KEY=your-api-secret-key
+# Аутентификация обязательна (случайный секрет минимум 32 символа)
+API_SECRET_KEY=<random-secret-at-least-32-characters>
 ```
 
 ### Вариант А. Запуск через Docker (Рекомендуемый)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+
+os.environ.setdefault("API_SECRET_KEY", "test-only-secret-key-never-use-in-production-12345")
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.dialects.postgresql import JSONB
 
