@@ -20,7 +20,15 @@ archive_path=$2
 trap 'rm -f "$archive_path"; rmdir "$(dirname "$archive_path")" 2>/dev/null || true' EXIT
 project_dir=/opt/belzakupki
 release_dir="$project_dir/releases/$release_sha"
-lock=/var/lock/mvn-shared-host-belzakupki.lock
+# The lock parent must be trusted: /var/lock resolves to a world-writable
+# /run/lock on this host and cannot protect a shared deployment transaction.
+[[ -d "$project_dir" && ! -L "$project_dir" ]] || { echo 'Provision a real /opt/belzakupki directory before deployment.' >&2; exit 1; }
+project_metadata=$(stat -c '%u:%a' "$project_dir")
+if [[ ! "$project_metadata" =~ ^0:([0-7]{3,4})$ ]] || (( (8#${BASH_REMATCH[1]} & 0022) != 0 )); then
+    echo 'Deployment directory must be root-owned and not writable by group or others.' >&2
+    exit 1
+fi
+lock="$project_dir/.kitlane-deploy.lock"
 [[ ! -L "$lock" ]] || { echo 'Refusing symlink lock' >&2; exit 1; }
 if [[ ! -e "$lock" ]]; then (umask 077; set -o noclobber; : > "$lock") || true; fi
 [[ -f "$lock" && $(stat -c '%u:%a' "$lock") == '0:600' ]] || { echo 'Unsafe deployment lock ownership/mode' >&2; exit 1; }
