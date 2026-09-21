@@ -116,12 +116,34 @@ REDIS_URL=redis://localhost:6379/0
 # Настройки для Telegram
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 
-# Настройки ИИ (DeepSeek)
+# Настройки ИИ: каждая настроенная модель вызывается не больше одного раза
+AI_PROVIDER_ORDER=deepseek,qwen,zai
 DEEPSEEK_TOKEN=your-deepseek-api-key
+DEEPSEEK_MODEL=deepseek-flash
+# URL рабочей области Alibaba Model Studio, оканчивающийся на /compatible-mode/v1
+QWEN_API_KEY=
+QWEN_BASE_URL=
+QWEN_MODEL=qwen3.5-flash-2026-02-23
+# Необязательный третий провайдер
+ZAI_API_KEY=
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4
+ZAI_MODEL=glm-4.7-flash
 
 # Аутентификация обязательна (случайный секрет минимум 32 символа)
 API_SECRET_KEY=<random-secret-at-least-32-characters>
 ```
+
+Результат анализа сохраняет поля `provider` и `model` вместе с прежними
+полями релевантности. Worker делает по одному ограниченному запросу к каждому
+настроенному провайдеру в порядке `AI_PROVIDER_ORDER`; корректный ответ с
+`"relevant": false` не запускает резервный вызов. При передаче собственного
+ключа в клиент системные ключи не используются.
+
+Настройки совместимы с официальными API:
+[DeepSeek Chat Completion](https://api-docs.deepseek.com/api/create-chat-completion/),
+[Qwen через OpenAI Chat Completions](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions),
+[Qwen Structured Output](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)
+и [Z.AI Chat Completion](https://docs.z.ai/api-reference/llm/chat-completion).
 
 ### Вариант А. Запуск через Docker (Рекомендуемый)
 1. Соберите образы и запустите СУБД и Redis:
