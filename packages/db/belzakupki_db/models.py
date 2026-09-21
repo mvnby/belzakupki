@@ -345,7 +345,7 @@ class TenderResult(Base, TimestampMixin, ReprMixin):
     )
 
     status: Mapped[str] = mapped_column(String(64), nullable=False)
-    winner_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    winner_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     winner_unp: Mapped[str | None] = mapped_column(String(64), nullable=True)
     contract_price: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
