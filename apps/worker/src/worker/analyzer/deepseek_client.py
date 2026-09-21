@@ -74,7 +74,7 @@ def analyze_relevance_by_metadata(
             {"role": "system", "content": get_metadata_system_prompt(niche_description, keywords, negative_keywords)},
             {"role": "user", "content": f"Tender Title: {title}\nCustomer: {customer}{desc_text}"},
         ],
-        timeout=30,
+        timeout=60,
         api_key=api_key,
     )
 
@@ -96,6 +96,6 @@ def analyze_tender_relevance(
             {"role": "system", "content": get_deep_analysis_system_prompt(niche_description, keywords, negative_keywords)},
             {"role": "user", "content": f"Tender Title: {title}\nCustomer: {customer}\n\nDocument Text:\n{documents_text}"},
         ],
-        timeout=45,
+        timeout=60,
         api_key=api_key,
     )

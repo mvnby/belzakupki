@@ -1,24 +1,27 @@
 """Bounded OpenAI-compatible provider fallback for worker AI analysis."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
+import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from loguru import logger
 
 
-MAX_TIMEOUT_SECONDS = 60
+MAX_STAGE_SECONDS = 60
 MAX_RESPONSE_BYTES = 1_000_000
+MAX_OUTPUT_TOKENS = 1_024
 DEFAULT_PROVIDER_ORDER = ("deepseek", "qwen", "zai")
 
 
 @dataclass(frozen=True)
 class ProviderConfig:
     name: str
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
     model: str
     extra_payload: dict[str, Any]
@@ -40,25 +43,50 @@ def _configured(value: str | None) -> bool:
 
 def _provider_order() -> tuple[str, ...]:
     configured = os.getenv("AI_PROVIDER_ORDER", ",".join(DEFAULT_PROVIDER_ORDER))
-    names = tuple(name.strip().lower() for name in configured.split(",") if name.strip())
-    return names or DEFAULT_PROVIDER_ORDER
+    order: list[str] = []
+    for name in configured.split(","):
+        normalized = name.strip().lower()
+        if normalized in DEFAULT_PROVIDER_ORDER and normalized not in order:
+            order.append(normalized)
+    return tuple(order)
+
+
+def _valid_base_url(value: str | None) -> bool:
+    if not _configured(value):
+        return False
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme == "https"
+        and parsed.netloc
+        and parsed.hostname
+        and (port is None or port > 0)
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def _system_provider(name: str) -> ProviderConfig | None:
     if name == "deepseek":
         token = os.getenv("DEEPSEEK_TOKEN")
-        if _configured(token):
+        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        if _configured(token) and _valid_base_url(base_url):
             return ProviderConfig(
                 name="deepseek",
                 api_key=token,
-                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                base_url=base_url,
                 model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                 extra_payload={"thinking": {"type": "disabled"}},
             )
     elif name == "qwen":
         token = os.getenv("QWEN_API_KEY")
         base_url = os.getenv("QWEN_BASE_URL")
-        if _configured(token) and _configured(base_url):
+        if _configured(token) and _valid_base_url(base_url):
             return ProviderConfig(
                 name="qwen",
                 api_key=token,
@@ -68,11 +96,12 @@ def _system_provider(name: str) -> ProviderConfig | None:
             )
     elif name == "zai":
         token = os.getenv("ZAI_API_KEY")
-        if _configured(token):
+        base_url = os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
+        if _configured(token) and _valid_base_url(base_url):
             return ProviderConfig(
                 name="zai",
                 api_key=token,
-                base_url=os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4"),
+                base_url=base_url,
                 model=os.getenv("ZAI_MODEL", "glm-4.7-flash"),
                 extra_payload={"thinking": {"type": "disabled"}},
             )
@@ -86,13 +115,14 @@ def configured_providers(api_key: str | None = None) -> tuple[ProviderConfig, ..
     shared system credentials.
     """
     if api_key is not None:
-        if not _configured(api_key):
+        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        if not _configured(api_key) or not _valid_base_url(base_url):
             return ()
         return (
             ProviderConfig(
                 name="deepseek",
                 api_key=api_key,
-                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                base_url=base_url,
                 model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                 extra_payload={"thinking": {"type": "disabled"}},
             ),
@@ -110,19 +140,26 @@ def is_ai_provider_configured() -> bool:
     return bool(configured_providers())
 
 
-def _read_response(response: httpx.Response) -> bytes:
+def _read_response(response: httpx.Response, deadline: float) -> bytes:
     response.raise_for_status()
     payload = bytearray()
     for chunk in response.iter_bytes():
+        if time.monotonic() >= deadline:
+            raise ProviderFailure("StageDeadlineExceeded")
         payload.extend(chunk)
         if len(payload) > MAX_RESPONSE_BYTES:
             raise ProviderFailure("ResponseTooLarge")
     return bytes(payload)
 
 
-def _post_json(provider: ProviderConfig, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+def _post_json(
+    provider: ProviderConfig,
+    payload: dict[str, Any],
+    timeout: float,
+    deadline: float,
+) -> dict[str, Any]:
     try:
-        with httpx.Client(timeout=min(max(timeout, 1), MAX_TIMEOUT_SECONDS)) as client:
+        with httpx.Client(timeout=max(timeout, 0.1)) as client:
             with client.stream(
                 "POST",
                 provider.endpoint,
@@ -132,7 +169,7 @@ def _post_json(provider: ProviderConfig, payload: dict[str, Any], timeout: int) 
                     "Content-Type": "application/json",
                 },
             ) as response:
-                raw = _read_response(response)
+                raw = _read_response(response, deadline)
     except ProviderFailure:
         raise
     except httpx.HTTPStatusError as exc:
@@ -157,17 +194,25 @@ def analyze_json(
     timeout: int,
     api_key: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return the first schema-valid analysis, trying each configured provider once."""
-    for provider in configured_providers(api_key):
+    """Return the first valid analysis within a stage budget checked per chunk."""
+    providers = configured_providers(api_key)
+    deadline = time.monotonic() + min(max(timeout, 1), MAX_STAGE_SECONDS)
+    for index, provider in enumerate(providers):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("AI provider stage deadline exhausted")
+            break
+        attempt_timeout = remaining / (len(providers) - index)
         payload: dict[str, Any] = {
             "model": provider.model,
             "messages": messages,
             "temperature": 0.0,
+            "max_tokens": MAX_OUTPUT_TOKENS,
             "response_format": {"type": "json_object"},
             **provider.extra_payload,
         }
         try:
-            analysis = _post_json(provider, payload, timeout)
+            analysis = _post_json(provider, payload, attempt_timeout, deadline)
         except ProviderFailure as exc:
             logger.warning(
                 "AI provider failed provider={} model={} error_class={} status={}",

@@ -33,6 +33,7 @@ class FakeClient:
     def __init__(self, outcomes, calls, **_kwargs):
         self.outcomes = outcomes
         self.calls = calls
+        self.timeout = _kwargs["timeout"]
 
     def __enter__(self):
         return self
@@ -41,7 +42,15 @@ class FakeClient:
         return False
 
     def stream(self, method, url, *, json, headers):
-        self.calls.append({"method": method, "url": url, "payload": json, "headers": headers})
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "payload": json,
+                "headers": headers,
+                "timeout": self.timeout,
+            }
+        )
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -102,6 +111,7 @@ def test_http_failure_uses_next_configured_provider(monkeypatch, status_code):
     assert calls[1]["payload"]["enable_thinking"] is False
     assert calls[1]["payload"]["response_format"] == {"type": "json_object"}
     assert calls[0]["payload"]["thinking"] == {"type": "disabled"}
+    assert calls[0]["payload"]["max_tokens"] == ai_providers.MAX_OUTPUT_TOKENS
 
 
 def test_timeout_uses_next_configured_provider(monkeypatch):
@@ -152,3 +162,61 @@ def test_explicit_tenant_key_never_falls_back_to_system_credentials(monkeypatch)
     ) is None
     assert len(calls) == 1
     assert calls[0]["headers"]["Authorization"] == "Bearer tenant-owned-key"
+
+
+def test_provider_order_is_known_and_unique(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER_ORDER", "qwen,unknown,qwen,deepseek,zai,deepseek")
+    monkeypatch.setenv("DEEPSEEK_TOKEN", "deepseek-key")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_BASE_URL", "https://workspace.example/compatible-mode/v1")
+    monkeypatch.setenv("ZAI_API_KEY", "zai-key")
+
+    providers = ai_providers.configured_providers()
+
+    assert [provider.name for provider in providers] == ["qwen", "deepseek", "zai"]
+    assert "zai-key" not in repr(providers[-1])
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://workspace.example/compatible-mode/v1",
+        "https://user:pass@workspace.example/compatible-mode/v1",
+        "https://workspace.example/compatible-mode/v1?debug=true",
+        "https://workspace.example/compatible-mode/v1#fragment",
+        "https://:443/compatible-mode/v1",
+        "https://[invalid",
+    ],
+)
+def test_provider_url_must_be_plain_https(monkeypatch, base_url):
+    monkeypatch.setenv("AI_PROVIDER_ORDER", "qwen")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_BASE_URL", base_url)
+
+    assert ai_providers.configured_providers() == ()
+
+
+def test_stage_deadline_shares_remaining_time_between_unique_providers(monkeypatch):
+    configure_deepseek_and_qwen(monkeypatch)
+    monkeypatch.setenv("AI_PROVIDER_ORDER", "deepseek,qwen,zai,deepseek")
+    monkeypatch.setenv("ZAI_API_KEY", "zai-key")
+    monkeypatch.setattr(ai_providers.time, "monotonic", lambda: 0.0)
+    calls = use_client(
+        monkeypatch,
+        [FakeResponse(status_code=401), FakeResponse(status_code=401), response_for({"relevant": True})],
+    )
+
+    analysis = ai_providers.analyze_json([{"role": "user", "content": "test"}], timeout=60)
+
+    assert analysis["provider"] == "zai"
+    assert [call["timeout"] for call in calls] == [20.0, 30.0, 60.0]
+
+
+def test_stage_deadline_is_checked_while_streaming_response(monkeypatch):
+    configure_deepseek_and_qwen(monkeypatch)
+    ticks = iter([0.0, 0.0, 60.0, 60.0])
+    monkeypatch.setattr(ai_providers.time, "monotonic", lambda: next(ticks))
+    calls = use_client(monkeypatch, [response_for({"relevant": True}), response_for({"relevant": True})])
+
+    assert ai_providers.analyze_json([{"role": "user", "content": "test"}], timeout=60) is None
+    assert len(calls) == 1
