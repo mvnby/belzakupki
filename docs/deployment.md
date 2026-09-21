@@ -15,8 +15,12 @@ the script never invents production secrets or copies development defaults.
 
 Compose always uses project `belzakupki` and working directory
 `/opt/belzakupki`. A build-context override points builds at the pinned release.
-The root-owned mode-0600 lock `/var/lock/mvn-shared-host-belzakupki.lock`
-coordinates with air-api deployment suspension on this shared host.
+The root-owned mode-0600 lock `/opt/belzakupki/.kitlane-deploy.lock`
+coordinates with air-api deployment suspension on this shared host. Its parent
+`/opt/belzakupki` must be a real root-owned directory without group/world write
+permissions (normally `root:root`, mode `0755`); deployment checks this before
+creating or opening the lock. `/var/lock` is unsuitable on hosts where it resolves
+to world-writable `/run/lock`.
 
 This is a cold rollout: scheduler, worker and Telegram receive SIGTERM before the
 build. The script waits up to 60 seconds for graceful exit; a busy worker aborts

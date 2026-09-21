@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize(('weak_secret', 'redis_mode'), [(True, 'ready'), (False, 'ready'), (False, 'mismatch'), (False, 'disabled'), (False, 'rewrite'), (False, 'failed'), (False, 'new'), (False, 'success')])
+@pytest.mark.parametrize(('weak_secret', 'redis_mode'), [(True, 'ready'), (False, 'ready'), (False, 'mismatch'), (False, 'disabled'), (False, 'rewrite'), (False, 'failed'), (False, 'new'), (False, 'success'), (False, 'unsafe_owner'), (False, 'unsafe_group'), (False, 'unsafe_world')])
 def test_deployment_preflight_and_build_failure_restore(tmp_path, weak_secret, redis_mode):
     project = tmp_path / 'project'
     project.mkdir()
@@ -18,7 +18,7 @@ def test_deployment_preflight_and_build_failure_restore(tmp_path, weak_secret, r
     (project / 'releases' / sha).mkdir(parents=True)
     archive = tmp_path / 'release.tar'
     archive.touch()
-    lock = tmp_path / 'lock'
+    lock = project / '.kitlane-deploy.lock'
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     trace = tmp_path / 'calls.jsonl'
@@ -68,20 +68,24 @@ else: raise AssertionError(args)
 state_file.write_text(json.dumps(state))
 ''')
     docker.chmod(0o755)
-    for name, content in [('stat', 'echo 0:600'), ('flock', 'exit 0')]:
+    for name, content in [('stat', 'case "$*" in *.kitlane-deploy.lock) echo 0:600 ;; *) echo "$TEST_PROJECT_META" ;; esac'), ('flock', 'exit 0')]:
         executable = bin_dir / name
         executable.write_text('#!/bin/sh\n' + content + '\n')
         executable.chmod(0o755)
     remote = (ROOT / 'deploy.sh').read_text().split("<<'REMOTE' | tee \"$deploy_output\"\n", 1)[1].rsplit('\nREMOTE', 1)[0]
     remote = remote.replace('project_dir=/opt/belzakupki', f'project_dir={project}')
-    remote = remote.replace('lock=/var/lock/mvn-shared-host-belzakupki.lock', f'lock={lock}')
     result = subprocess.run(['bash', '-s', '--', sha, str(archive)], input=remote, text=True, capture_output=True,
-        env={**os.environ, 'PATH': str(bin_dir) + ':' + os.environ['PATH'], 'TRACE': str(trace), 'STATE': str(state), 'TEST_SECRET': 'short' if weak_secret else 'x' * 40, 'REDIS_MODE': redis_mode})
+        env={**os.environ, 'PATH': str(bin_dir) + ':' + os.environ['PATH'], 'TRACE': str(trace), 'STATE': str(state), 'TEST_SECRET': 'short' if weak_secret else 'x' * 40, 'REDIS_MODE': redis_mode, 'TEST_PROJECT_META': {'unsafe_owner': '501:755', 'unsafe_group': '0:775', 'unsafe_world': '0:777'}.get(redis_mode, '0:755')})
     if redis_mode == 'success':
         assert result.returncode == 0, result.stderr
     else:
         assert result.returncode != 0
-    calls = [json.loads(line) for line in trace.read_text().splitlines()]
+    calls = [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
+    if redis_mode.startswith('unsafe_'):
+        assert 'root-owned and not writable' in result.stderr
+        assert not lock.exists()
+        assert not calls
+        return
     assert all('stop' not in call and 'prune' not in call for call in calls)
     if weak_secret:
         assert 'API_SECRET_KEY' in result.stderr
