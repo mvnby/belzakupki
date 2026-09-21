@@ -28,10 +28,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM tender_results WHERE length(winner_name) > 500
+            ) THEN
+                RAISE EXCEPTION 'cannot downgrade tender_results.winner_name while values exceed 500 characters';
+            END IF;
+        END $$;
+        """
+    )
     op.alter_column(
         "tender_results",
         "winner_name",
         existing_type=sa.Text(),
         type_=sa.String(length=500),
-        postgresql_using="winner_name::varchar(500)",
     )

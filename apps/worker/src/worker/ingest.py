@@ -626,10 +626,10 @@ def run_ai_analysis_for_new_matches(
 
     last_selected_id = matches[-1].id
 
-    token = os.getenv("DEEPSEEK_TOKEN")
-    if not token or token == "your-deepseek-token":
+    from worker.analyzer.deepseek_client import is_ai_provider_configured
+    if not is_ai_provider_configured():
         logger.warning(
-            "DEEPSEEK_TOKEN is not configured; explicitly approving {} "
+            "AI provider is not configured; explicitly approving {} "
             "morphology-matched rows in this bounded batch",
             len(matches),
         )
@@ -695,7 +695,7 @@ def run_ai_analysis_for_new_matches(
         if tenant_id:
             from belzakupki_db.billing import can_use_ai_credits
             if not can_use_ai_credits(session, tenant_id):
-                logger.info(f"AI credits exhausted or subscription expired for tenant {tenant_id}. Bypassing DeepSeek AI analysis for match {match.id}.")
+                logger.info(f"AI credits exhausted or subscription expired for tenant {tenant_id}. Bypassing AI analysis for match {match.id}.")
                 match.ai_relevance = True
                 match.ai_analysis = {
                     "relevant": True,
@@ -729,7 +729,9 @@ def run_ai_analysis_for_new_matches(
                 match.ai_analysis = {
                     "relevant": False,
                     "explanation": metadata_analysis.get("explanation", "Отклонено на этапе проверки метаданных"),
-                    "stage": 1
+                    "stage": 1,
+                    "provider": metadata_analysis.get("provider"),
+                    "model": metadata_analysis.get("model"),
                 }
                 match.status = MatchStatus.REJECTED_BY_AI
                 session.add(match)
@@ -872,7 +874,7 @@ def run_ai_analysis_for_new_matches(
                     from belzakupki_db.billing import increment_ai_credits
                     increment_ai_credits(session, tenant_id)
             else:
-                logger.warning(f"DeepSeek analysis returned None for match {match.id}")
+                logger.warning(f"AI analysis returned None for match {match.id}")
 
             session.add(match)
             session.flush()

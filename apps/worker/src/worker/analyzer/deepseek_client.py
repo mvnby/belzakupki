@@ -1,27 +1,9 @@
 from __future__ import annotations
 
-import json
-import os
 from typing import Any
-import httpx
-from loguru import logger
 
-try:
-    from tenacity import (
-        retry,
-        retry_if_exception_type,
-        stop_after_attempt,
-        wait_exponential,
-    )
-    _TENACITY_AVAILABLE = True
-except ImportError:
-    _TENACITY_AVAILABLE = False
-    logger.warning(
-        "tenacity is not installed — DeepSeek API calls will NOT be retried on failure. "
-        "Run `pip install tenacity` to enable automatic retries."
-    )
+from worker.analyzer.ai_providers import analyze_json, is_ai_provider_configured
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 def get_metadata_system_prompt(niche_description: str, keywords: list[str], negative_keywords: list[str]) -> str:
     keywords_str = ", ".join(keywords)
@@ -44,6 +26,7 @@ def get_metadata_system_prompt(niche_description: str, keywords: list[str], nega
   "explanation": "Краткое объяснение на русском языке, почему тендер подходит или почему он отклонен (укажи конкретную причину)"
 }}
 """
+
 
 def get_deep_analysis_system_prompt(niche_description: str, keywords: list[str], negative_keywords: list[str]) -> str:
     keywords_str = ", ".join(keywords)
@@ -75,21 +58,6 @@ You MUST return a JSON object (JSON Mode is enabled) with the following structur
 }}
 """
 
-def _do_deepseek_post(url: str, payload: dict, headers: dict, timeout: int) -> dict:
-    """Raw HTTP call to DeepSeek — separated so tenacity can wrap it."""
-    response = httpx.post(url, json=payload, headers=headers, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
-
-
-if _TENACITY_AVAILABLE:
-    _do_deepseek_post = retry(
-        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=8),
-        reraise=True,
-    )(_do_deepseek_post)
-
 
 def analyze_relevance_by_metadata(
     title: str,
@@ -100,42 +68,16 @@ def analyze_relevance_by_metadata(
     description: str | None = None,
     api_key: str | None = None,
 ) -> dict[str, Any] | None:
-    token = api_key or os.getenv("DEEPSEEK_TOKEN")
-    if not token or token == "your-deepseek-token":
-        logger.warning("DEEPSEEK_TOKEN is not configured. Skipping AI metadata analysis.")
-        return None
-
     desc_text = f"\nDescription: {description}" if description else ""
-    user_content = f"Tender Title: {title}\nCustomer: {customer}{desc_text}"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    metadata_system_prompt = get_metadata_system_prompt(niche_description, keywords, negative_keywords)
-
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": metadata_system_prompt},
-            {"role": "user", "content": user_content},
+    return analyze_json(
+        [
+            {"role": "system", "content": get_metadata_system_prompt(niche_description, keywords, negative_keywords)},
+            {"role": "user", "content": f"Tender Title: {title}\nCustomer: {customer}{desc_text}"},
         ],
-        "temperature": 0.0,
-        "response_format": {"type": "json_object"},
-    }
+        timeout=30,
+        api_key=api_key,
+    )
 
-    try:
-        logger.info(f"Sending metadata of tender '{title}' to DeepSeek API for Stage 1 check...")
-        result = _do_deepseek_post(DEEPSEEK_API_URL, payload, headers, timeout=30)
-        content = result["choices"][0]["message"]["content"]
-        analysis = json.loads(content)
-        logger.info(f"DeepSeek metadata analysis complete. Relevant: {analysis.get('relevant')}")
-        return analysis
-
-    except Exception as e:
-        logger.error(f"DeepSeek metadata API call failed: {e}")
-        return None
 
 def analyze_tender_relevance(
     title: str,
@@ -146,44 +88,14 @@ def analyze_tender_relevance(
     negative_keywords: list[str],
     api_key: str | None = None,
 ) -> dict[str, Any] | None:
-    token = api_key or os.getenv("DEEPSEEK_TOKEN")
-    if not token or token == "your-deepseek-token":
-        logger.warning("DEEPSEEK_TOKEN is not configured. Skipping AI analysis.")
-        return None
-
-    # Truncate document text to prevent exceeding context window (e.g. max 30,000 characters)
-    max_chars = 30000
+    max_chars = 30_000
     if len(documents_text) > max_chars:
-        logger.info(f"Tender text length ({len(documents_text)}) exceeds limit. Truncating to {max_chars} chars.")
         documents_text = documents_text[:max_chars] + "\n[Text truncated due to length limits]"
-
-    user_content = f"Tender Title: {title}\nCustomer: {customer}\n\nDocument Text:\n{documents_text}"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    deep_analysis_system_prompt = get_deep_analysis_system_prompt(niche_description, keywords, negative_keywords)
-
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": deep_analysis_system_prompt},
-            {"role": "user", "content": user_content},
+    return analyze_json(
+        [
+            {"role": "system", "content": get_deep_analysis_system_prompt(niche_description, keywords, negative_keywords)},
+            {"role": "user", "content": f"Tender Title: {title}\nCustomer: {customer}\n\nDocument Text:\n{documents_text}"},
         ],
-        "temperature": 0.0,
-        "response_format": {"type": "json_object"},
-    }
-
-    try:
-        logger.info(f"Sending tender '{title}' to DeepSeek API...")
-        result = _do_deepseek_post(DEEPSEEK_API_URL, payload, headers, timeout=45)
-        content = result["choices"][0]["message"]["content"]
-        analysis = json.loads(content)
-        logger.info(f"DeepSeek analysis complete. Relevant: {analysis.get('relevant')}")
-        return analysis
-
-    except Exception as e:
-        logger.error(f"DeepSeek API call failed: {e}")
-        return None
+        timeout=45,
+        api_key=api_key,
+    )
