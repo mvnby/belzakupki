@@ -960,40 +960,44 @@ def check_results_for_active_tenders(
                 result_data = it.fetch_tender_result(tender.url)
                 
             if result_data:
-                tender_status = result_data.get("status", "Состоялась")
-                tender.status = tender_status
-                
-                # Convert Decimal to float for JSON compatibility in raw_result_data
-                from decimal import Decimal
-                raw_result_data = dict(result_data)
-                if isinstance(raw_result_data.get("contract_price"), Decimal):
-                    raw_result_data["contract_price"] = float(raw_result_data["contract_price"])
-                
-                # Сохраняем или обновляем результат закупки
-                res_stmt = select(TenderResult).where(TenderResult.tender_id == tender.id)
-                db_result = session.scalars(res_stmt).first()
-                
-                if not db_result:
-                    db_result = TenderResult(
-                        tender_id=tender.id,
-                        status=tender_status,
-                        winner_name=result_data.get("winner_name"),
-                        winner_unp=result_data.get("winner_unp"),
-                        contract_price=result_data.get("contract_price"),
-                        currency=result_data.get("currency"),
-                        raw_result_data=raw_result_data
-                    )
-                    session.add(db_result)
-                else:
-                    db_result.status = tender_status
-                    db_result.winner_name = result_data.get("winner_name")
-                    db_result.winner_unp = result_data.get("winner_unp")
-                    db_result.contract_price = result_data.get("contract_price")
-                    db_result.currency = result_data.get("currency")
-                    db_result.raw_result_data = raw_result_data
-                
-                session.flush()
-                logger.info(f"Successfully saved result for tender {tender.id}: status={tender_status}, winner={db_result.winner_name}, price={db_result.contract_price}")
+                # A malformed protocol must not poison the session for the rest
+                # of this bounded batch.  The savepoint also rolls back the
+                # tender status if its result cannot be stored.
+                with session.begin_nested():
+                    tender_status = result_data.get("status", "Состоялась")
+                    tender.status = tender_status
+
+                    # Convert Decimal to float for JSON compatibility in raw_result_data
+                    from decimal import Decimal
+                    raw_result_data = dict(result_data)
+                    if isinstance(raw_result_data.get("contract_price"), Decimal):
+                        raw_result_data["contract_price"] = float(raw_result_data["contract_price"])
+
+                    # Сохраняем или обновляем результат закупки
+                    res_stmt = select(TenderResult).where(TenderResult.tender_id == tender.id)
+                    db_result = session.scalars(res_stmt).first()
+
+                    if not db_result:
+                        db_result = TenderResult(
+                            tender_id=tender.id,
+                            status=tender_status,
+                            winner_name=result_data.get("winner_name"),
+                            winner_unp=result_data.get("winner_unp"),
+                            contract_price=result_data.get("contract_price"),
+                            currency=result_data.get("currency"),
+                            raw_result_data=raw_result_data
+                        )
+                        session.add(db_result)
+                    else:
+                        db_result.status = tender_status
+                        db_result.winner_name = result_data.get("winner_name")
+                        db_result.winner_unp = result_data.get("winner_unp")
+                        db_result.contract_price = result_data.get("contract_price")
+                        db_result.currency = result_data.get("currency")
+                        db_result.raw_result_data = raw_result_data
+
+                    session.flush()
+                    logger.info(f"Successfully saved result for tender {tender.id}: status={tender_status}, winner={db_result.winner_name}, price={db_result.contract_price}")
             else:
                 logger.info(f"No result protocol found yet for tender {tender.id} ({tender.url})")
         except Exception as e:
