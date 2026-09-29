@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from apps.api.main import app
 from apps.api.auth import validate_security_config
 from belzakupki_db.base import Base
-from belzakupki_db.models import Tenant, User, SearchProfile, TenderSource, Tender, TenderMatch
+from belzakupki_db.models import Tenant, User, SearchProfile, TenderSource, Tender, TenderDocument, TenderMatch
 from belzakupki_db.session import get_session
 
 
@@ -101,6 +101,60 @@ def test_profile_allowlist_and_inactive_tenant(integration, monkeypatch):
     tenant.is_active = False
     session.commit()
     assert client.get("/api/v1/opportunities", headers=headers).status_code == 403
+
+
+def test_tender_detail_and_document_download_are_tenant_scoped(integration, monkeypatch):
+    client, session, matches, headers = integration
+    tender = matches[0].tender
+    tender.customer_name = "ООО Заказчик"
+    tender.raw_data = {
+        "source_number": "BZ-455",
+        "estimated_value": "12000 BYN",
+        "currency": "BYN",
+        "contacts": {"name": "Иванов И.И.", "phone": "+375291234567", "email": "mail@example.org"},
+        "unp": "123456789",
+        "legal_address": "г. Минск, ул. Тестовая, 1",
+        "lots": [{"number": "1", "name": "Оборудование", "quantity": "8 шт."}],
+        "attachments": [
+            {"name": "specification.doc", "url": "https://example.org/files/specification.doc"},
+            {"name": "unsafe.doc", "url": "http://example.org/files/unsafe.doc"},
+            {"name": "other-host.doc", "url": "https://untrusted.example/files/other-host.doc"},
+        ],
+    }
+    session.add(TenderDocument(tender_id=tender.id, file_name="specification.doc", content="equipment details"))
+    session.commit()
+
+    detail = client.get("/api/v1/tenders/test_source/0", headers=headers)
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()
+    assert payload["source"] == "test_source"
+    assert payload["external_id"] == "0"
+    assert payload["customer"] == {
+        "name": "ООО Заказчик", "unp": "123456789",
+        "legal_address": "г. Минск, ул. Тестовая, 1", "postal_address": None,
+        "contacts": {"name": "Иванов И.И.", "phone": "+375291234567", "email": "mail@example.org"},
+    }
+    assert payload["objects"] == [{"number": "1", "name": "Оборудование", "quantity": "8 шт."}]
+    assert len(payload["documents"]) == 1
+    document = payload["documents"][0]
+    assert document["name"] == "specification.doc"
+    assert document["source_url"] == "https://example.org/files/specification.doc"
+    assert document["extracted_text"] == "equipment details"
+    assert document["extracted_text_truncated"] is False
+
+    monkeypatch.setattr("apps.api.opportunities._download_document", lambda source, url: iter([b"original bytes"]))
+    downloaded = client.get(
+        f"/api/v1/tenders/test_source/0/documents/{document['id']}", headers=headers,
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"original bytes"
+    assert downloaded.headers["content-disposition"] == 'attachment; filename="specification.doc"'
+
+    monkeypatch.setenv("INTEGRATION_PROFILE_IDS", "2")
+    assert client.get("/api/v1/tenders/test_source/0", headers=headers).status_code == 404
+    monkeypatch.delenv("INTEGRATION_PROFILE_IDS")
+    monkeypatch.setenv("INTEGRATION_TENANT_ID", "2")
+    assert client.get("/api/v1/tenders/test_source/0", headers=headers).status_code == 404
 
 
 def test_health_is_json_and_readiness_detects_stopped_worker(monkeypatch):
