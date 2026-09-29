@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker
@@ -142,7 +143,7 @@ def test_tender_detail_and_document_download_are_tenant_scoped(integration, monk
     assert document["extracted_text"] == "equipment details"
     assert document["extracted_text_truncated"] is False
 
-    monkeypatch.setattr("apps.api.opportunities._download_document", lambda source, url: iter([b"original bytes"]))
+    monkeypatch.setattr("apps.api.opportunities._download_document", lambda source, url, base_url: iter([b"original bytes"]))
     downloaded = client.get(
         f"/api/v1/tenders/test_source/0/documents/{document['id']}", headers=headers,
     )
@@ -155,6 +156,86 @@ def test_tender_detail_and_document_download_are_tenant_scoped(integration, monk
     monkeypatch.delenv("INTEGRATION_PROFILE_IDS")
     monkeypatch.setenv("INTEGRATION_TENANT_ID", "2")
     assert client.get("/api/v1/tenders/test_source/0", headers=headers).status_code == 404
+
+
+def test_document_download_validates_each_redirect(monkeypatch):
+    from apps.api import opportunities
+
+    class Response:
+        def __init__(self, status_code, headers=None, chunks=()):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self._chunks = chunks
+
+        @property
+        def is_redirect(self):
+            return 300 <= self.status_code < 400
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise HTTPException(self.status_code, "upstream error")
+
+        def iter_bytes(self, chunk_size):
+            yield from self._chunks
+
+    class Stream:
+        def __init__(self, response):
+            self.response = response
+
+        def __enter__(self):
+            return self.response
+
+        def __exit__(self, *args):
+            return False
+
+    class Client:
+        responses = []
+        requested_urls = []
+
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return Response(200)
+
+        def stream(self, method, url):
+            self.requested_urls.append(url)
+            return Stream(self.responses.pop(0))
+
+    monkeypatch.setattr(opportunities.httpx, "Client", Client)
+    monkeypatch.setattr(opportunities, "_provider_download_settings", lambda source: ({}, True, None))
+
+    Client.responses = [
+        Response(302, {"location": "/files/final.doc"}),
+        Response(200, {"content-length": "2"}, [b"ok"]),
+    ]
+    assert list(opportunities._download_document(
+        "test_source", "https://example.org/files/start.doc", "https://example.org",
+    )) == [b"ok"]
+    assert Client.requested_urls == [
+        "https://example.org/files/start.doc", "https://example.org/files/final.doc",
+    ]
+
+    Client.requested_urls = []
+    Client.responses = [Response(302, {"location": "https://127.0.0.1/private"})]
+    with pytest.raises(HTTPException, match="redirect is unavailable"):
+        list(opportunities._download_document(
+            "test_source", "https://example.org/files/start.doc", "https://example.org",
+        ))
+    assert Client.requested_urls == ["https://example.org/files/start.doc"]
+
+    assert opportunities._safe_source_url("https://example.org:444/doc", "https://example.org") is None
+    assert opportunities._safe_source_url("https://user:pass@example.org/doc", "https://example.org") is None
+    assert opportunities._safe_source_url("https://example.org/doc", "https://user:pass@example.org") is None
+    assert opportunities._safe_source_url(
+        "https://cdn.example.org:8443/doc", "https://example.org:8443",
+    ) == "https://cdn.example.org:8443/doc"
 
 
 def test_health_is_json_and_readiness_detects_stopped_worker(monkeypatch):

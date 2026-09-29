@@ -146,7 +146,9 @@ parser has an explicit, verified schema for it.
 
 The same scoped bearer credential downloads the original document bytes. The
 service only proxies an HTTPS attachment whose host is the tender source host
-or its subdomain, warms source sessions where needed, and enforces a 25 MiB
-streaming limit. This keeps source-specific access in BelZakupki while air-api
-persists its own attachment. `document_id` comes from the detail response and
-is a stable SHA-256 identifier of the document name and source URL.
+or its subdomain, on the source's configured port and without URL credentials.
+It validates every redirect under those same rules, follows at most three,
+warms source sessions where needed, and enforces a 25 MiB streaming limit. This
+keeps source-specific access in BelZakupki while air-api persists its own
+attachment. `document_id` comes from the detail response and is a stable
+SHA-256 identifier of the document name and source URL.

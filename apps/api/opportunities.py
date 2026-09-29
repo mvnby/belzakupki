@@ -4,7 +4,7 @@ import hmac
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import jwt
@@ -221,17 +221,35 @@ def _safe_source_url(value: Any, base_url: str) -> str | None:
     candidate = _nonempty_text(value)
     if not candidate:
         return None
-    parsed = urlparse(candidate)
-    base = urlparse(base_url)
-    if parsed.scheme != "https" or not parsed.hostname or not base.hostname:
+    try:
+        parsed = urlparse(candidate)
+        base = urlparse(base_url)
+        candidate_port = parsed.port or 443
+        base_port = base.port or 443
+    except ValueError:
         return None
-    if parsed.hostname != base.hostname and not parsed.hostname.endswith(f".{base.hostname}"):
+    if (
+        parsed.scheme != "https"
+        or base.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or base.username is not None
+        or base.password is not None
+        or not parsed.hostname
+        or not base.hostname
+        or candidate_port != base_port
+    ):
+        return None
+    candidate_host = parsed.hostname.casefold()
+    base_host = base.hostname.casefold()
+    if candidate_host != base_host and not candidate_host.endswith(f".{base_host}"):
         return None
     return candidate
 
 
 EXTRACTED_DOCUMENT_TEXT_LIMIT = 120_000
 DOCUMENT_DOWNLOAD_MAX_BYTES = 25 * 1024 * 1024
+DOCUMENT_DOWNLOAD_MAX_REDIRECTS = 3
 
 
 def _document_id(name: str, source_url: str) -> str:
@@ -281,22 +299,35 @@ def _provider_download_settings(source_code: str) -> tuple[dict[str, str], bool,
     return {"User-Agent": "BelZakupki document proxy"}, True, None
 
 
-def _download_document(source_code: str, source_url: str):
+def _download_document(source_code: str, source_url: str, source_base_url: str):
     headers, verify_ssl, warmup_url = _provider_download_settings(source_code)
-    with httpx.Client(follow_redirects=True, headers=headers, timeout=30, verify=verify_ssl) as client:
+    with httpx.Client(follow_redirects=False, headers=headers, timeout=30, verify=verify_ssl) as client:
         if warmup_url:
-            client.get(warmup_url).raise_for_status()
-        with client.stream("GET", source_url) as upstream:
-            upstream.raise_for_status()
-            content_length = upstream.headers.get("content-length")
-            if content_length and int(content_length) > DOCUMENT_DOWNLOAD_MAX_BYTES:
-                raise HTTPException(413, "Source document exceeds the download limit")
-            total = 0
-            for chunk in upstream.iter_bytes(chunk_size=64 * 1024):
-                total += len(chunk)
-                if total > DOCUMENT_DOWNLOAD_MAX_BYTES:
+            warmup = client.get(warmup_url)
+            if warmup.status_code >= 400:
+                warmup.raise_for_status()
+        current_url = source_url
+        for _ in range(DOCUMENT_DOWNLOAD_MAX_REDIRECTS + 1):
+            with client.stream("GET", current_url) as upstream:
+                if upstream.is_redirect:
+                    location = upstream.headers.get("location")
+                    next_url = _safe_source_url(urljoin(current_url, location or ""), source_base_url)
+                    if not next_url:
+                        raise HTTPException(502, "Source document redirect is unavailable")
+                    current_url = next_url
+                    continue
+                upstream.raise_for_status()
+                content_length = upstream.headers.get("content-length")
+                if content_length and int(content_length) > DOCUMENT_DOWNLOAD_MAX_BYTES:
                     raise HTTPException(413, "Source document exceeds the download limit")
-                yield chunk
+                total = 0
+                for chunk in upstream.iter_bytes(chunk_size=64 * 1024):
+                    total += len(chunk)
+                    if total > DOCUMENT_DOWNLOAD_MAX_BYTES:
+                        raise HTTPException(413, "Source document exceeds the download limit")
+                    yield chunk
+                return
+        raise HTTPException(502, "Source document redirected too many times")
 
 
 def _scoped_tender(
@@ -386,7 +417,7 @@ def tender_document(
         raise HTTPException(404, "Tender document is unavailable in this integration scope")
     safe_name = document.name.replace('"', "'").replace("\n", " ").replace("\r", " ")
     return StreamingResponse(
-        _download_document(tender.source.code, document.source_url),
+        _download_document(tender.source.code, document.source_url, tender.source.base_url),
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
     )
