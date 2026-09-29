@@ -98,3 +98,57 @@ states keyed by `match.id`, then aggregate those states under the procurement's
 replace an eligible confirmed match in another. Recompute aggregate eligibility
 from the retained matches using the consumer's configured relevance policy;
 do not sequentially overwrite one tender-level relevance field with each match.
+
+## GET /api/v1/tenders/{source}/{external_id}
+
+The same `Authorization: Bearer <integration-key>` returns the details for one
+tender only when at least one of its matches belongs to the configured tenant
+and profile allowlist. A guessed source and external ID therefore cannot expose
+another tenant's tender. The response carries the normalized tender fields and
+the collector's available customer data. Missing upstream fields stay `null`;
+the collector never invents an UNP, address, or corrected contact value.
+
+```json
+{
+  "source": "goszakupki_by",
+  "external_id": "455",
+  "source_url": "https://goszakupki.by/...",
+  "title": "Поставка оборудования",
+  "deadline_at": "2026-10-01T12:00:00Z",
+  "estimated_value": "12000 BYN",
+  "customer": {
+    "name": "Заказчик", "unp": "123456789",
+    "legal_address": "г. Минск, ...", "postal_address": null,
+    "contacts": {"name": "Иванов И.И.", "phone": "+375...", "email": "mail@example.by"}
+  },
+  "objects": [{"number": "1", "name": "Оборудование", "quantity": "8 шт."}],
+  "documents": [{
+    "id": "sha256-hex", "name": "specification.doc",
+    "source_url": "https://goszakupki.by/...",
+    "extracted_text": "...", "extracted_text_truncated": false
+  }]
+}
+```
+
+`extracted_text` is the collector's saved document extraction, capped at
+120,000 characters for each document. It preserves source text as extracted;
+the consumer decides whether conflicting contact values need review. The
+consumer should impose its own smaller combined prompt budget when assembling
+several documents.
+
+`objects` carries source-provided structured procurement objects. Existing
+collectors store these as `lots`, so `objects` mirrors `lots` until a provider
+supplies a more specific object model. A document-only site or unit breakdown
+is not inferred from prose: it remains in `extracted_text` until a source
+parser has an explicit, verified schema for it.
+
+## GET /api/v1/tenders/{source}/{external_id}/documents/{document_id}
+
+The same scoped bearer credential downloads the original document bytes. The
+service only proxies an HTTPS attachment whose host is the tender source host
+or its subdomain, on the source's configured port and without URL credentials.
+It validates every redirect under those same rules, follows at most three,
+warms source sessions where needed, and enforces a 25 MiB streaming limit. This
+keeps source-specific access in BelZakupki while air-api persists its own
+attachment. `document_id` comes from the detail response and is a stable
+SHA-256 identifier of the document name and source URL.

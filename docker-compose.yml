@@ -12,6 +12,9 @@ services:
     environment:
       APP_ENV: local
       API_SECRET_KEY: "${API_SECRET_KEY:?Set a strong API_SECRET_KEY}"
+      INTEGRATION_API_KEY: "${INTEGRATION_API_KEY:-}"
+      INTEGRATION_TENANT_ID: "${INTEGRATION_TENANT_ID:-}"
+      INTEGRATION_PROFILE_IDS: "${INTEGRATION_PROFILE_IDS:-}"
       LOG_LEVEL: info
       DATABASE_URL: postgresql+psycopg://belzakupki:belzakupki@db:5432/belzakupki
       REDIS_URL: redis://redis:6379/0
