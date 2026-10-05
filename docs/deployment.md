@@ -116,3 +116,34 @@ requests and retries can still delay a chunk. Monitor actual chunk duration and
 upstream failures; reducing the count reduces the maximum number of slow lookups
 in a job. The old complete-snapshot drain helper remains for explicit maintenance
 use, but the scheduler no longer calls it.
+
+## Reviewed Goszakupki customer-field refresh
+
+The bounded refresh command is allowlisted to Goszakupki external IDs
+`3722135` (`/marketing/view/3722135`) and `3722307`
+(`/etrade/view/3722307`). Run it only after the parser release is deployed.
+The default invocation is read-only: it checks that exactly those two rows
+exist under source `goszakupki_by`, verifies their exact source URLs, fetches
+both current pages, and prints only customer fields before and after plus a plan
+digest.
+
+Build and review a plan:
+
+```sh
+docker compose run --rm api belzakupki-refresh-goszakupki-customer-details
+```
+
+Apply only the reviewed digest from that output:
+
+```sh
+docker compose run --rm api belzakupki-refresh-goszakupki-customer-details \
+  --execute --plan-digest REVIEWED_SHA256_DIGEST
+```
+
+Execution fetches both pages again and refuses a changed digest. It then locks
+the exact target rows in one short database transaction, rechecks their source,
+external IDs, URLs and stored raw data, and writes only non-empty UNP, legal
+address, and contact fields. Empty upstream fields never erase saved values;
+all other raw data and document rows are preserved. If a row or source value
+changed after review, make and inspect a new plan. Never substitute the general
+ingest command for this targeted procedure.

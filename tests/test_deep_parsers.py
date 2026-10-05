@@ -1,4 +1,3 @@
-import pytest
 from worker.sources.goszakupki_by import parse_tender_details_html as parse_goszakupki
 from worker.sources.icetrade_by import parse_tender_details_html as parse_icetrade
 
@@ -119,6 +118,7 @@ def test_parse_goszakupki_details():
     assert res["lots"][0]["quantity"] == "2 шт."
     assert res["lots"][0]["okrb"] == "28.25.12"
     assert res["lots"][0]["estimated_value"] == "10 000 BYN"
+
 
 def test_parse_icetrade_details():
     res = parse_icetrade(MOCK_ICETRADE_HTML)

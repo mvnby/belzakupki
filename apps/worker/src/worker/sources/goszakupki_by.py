@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 import os
+import re
 from urllib.parse import urlencode, urljoin
 
 import httpx
@@ -361,12 +362,48 @@ def fetch_tender_attachments(
 
 def parse_tender_details_html(html: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
-    
+
     contacts = {"name": "", "phone": "", "email": ""}
     delivery_terms = ""
     payment_terms = ""
+    unp = ""
+    legal_address = ""
     lots = []
-    
+
+    # Some source pages put a person's name and phone in one value cell.
+    # Match Belarusian numbers only, so unrelated numbers in labels/text are
+    # not exposed as contact data.
+    phone_pattern = re.compile(
+        r"(?<!\d)(?:\+?375|80)?[\s().-]*\(?\d{2,3}\)?"
+        r"[\s().-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}(?!\d)"
+    )
+
+    def split_contact(value: str) -> tuple[str, str]:
+        match = phone_pattern.search(value)
+        if not match:
+            return value, ""
+        name = (value[:match.start()] + " " + value[match.end():]).strip(" \t\r\n,;:-")
+        name = re.sub(r"(?:,?\s*(?:тел(?:ефон)?\.?|phone)\s*:?)$", "", name, flags=re.IGNORECASE)
+        return normalize_html_text(name), normalize_html_text(match.group(0))
+
+    customer_tables = set()
+    operator_tables = set()
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 2:
+                continue
+            label = normalize_html_text(cells[0].get_text(" ", strip=True)).lower()
+            if "оператор" in label and "унп" in label:
+                operator_tables.add(table)
+            if (
+                "оператор" not in label
+                and "унп" in label
+                and any(word in label for word in ("организац", "заказ", "закупающ"))
+            ):
+                customer_tables.add(table)
+                break
+
     # 1. Parse DetailView tables for contacts and terms
     for row in soup.find_all("tr"):
         th = row.find(["th", "td"])
@@ -379,12 +416,38 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
         td_val = normalize_html_text(td[1].get_text(" ", strip=True))
         if not td_val:
             continue
-            
+
+        if row.find_parent("table") in operator_tables:
+            continue
+
+        # Goszakupki pages contain site/operator details outside the tender's
+        # customer rows. Accept UNP/address only when the row label explicitly
+        # identifies the customer organization; never use an unlabeled global
+        # value or an operator row.
+        if "оператор" not in th_text and "унп" in th_text:
+            if any(word in th_text for word in ("организац", "заказ", "закупающ")) and not unp:
+                unp = td_val
+        elif "оператор" not in th_text and "адрес" in th_text:
+            address_is_customer_scoped = any(
+                word in th_text for word in ("организац", "заказ", "закупающ")
+            ) or row.find_parent("table") in customer_tables
+            if address_is_customer_scoped and not legal_address:
+                legal_address = td_val
+        elif "оператор" not in th_text and "место нахождения" in th_text:
+            if any(word in th_text for word in ("организац", "заказ", "закупающ")) and not legal_address:
+                legal_address = td_val
+
         # Contacts check
         if "контакт" in th_text and not contacts["name"]:
-            contacts["name"] = td_val
+            name, embedded_phone = split_contact(td_val)
+            contacts["name"] = name
+            if embedded_phone and not contacts["phone"]:
+                contacts["phone"] = embedded_phone
         elif "телефон" in th_text and not contacts["phone"]:
-            contacts["phone"] = td_val
+            name, embedded_phone = split_contact(td_val)
+            if name and not contacts["name"]:
+                contacts["name"] = name
+            contacts["phone"] = embedded_phone or td_val
         elif ("email" in th_text or "e-mail" in th_text or "электронн" in th_text) and not contacts["email"]:
             contacts["email"] = td_val
             
@@ -483,6 +546,8 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
     from typing import Any
     return {
         "contacts": contacts,
+        "unp": unp,
+        "legal_address": legal_address,
         "delivery_terms": delivery_terms,
         "payment_terms": payment_terms,
         "lots": lots
@@ -722,4 +787,3 @@ def fetch_tender_result(
         if parsed:
             parsed["protocol_url"] = protocol_url
         return parsed
-
