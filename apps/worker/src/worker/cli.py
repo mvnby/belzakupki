@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from belzakupki_db.read import (
     list_matches,
@@ -11,6 +12,11 @@ from belzakupki_db.read import (
 from belzakupki_db.seed import seed_database
 from belzakupki_db.session import SessionLocal
 from worker.ingest import ingest_goszakupki_tenders
+from worker.customer_refresh import (
+    CustomerRefreshError,
+    build_customer_refresh_plan,
+    execute_customer_refresh_plan,
+)
 
 
 def _trim(value: object, width: int = 100) -> str:
@@ -95,6 +101,42 @@ def ingest_goszakupki() -> None:
             print("Sending notifications...")
             count = dispatch_notifications(session)
             print(f"Sent messages for {count} matches.")
+
+
+def refresh_goszakupki_customer_details() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Plan or execute the reviewed customer-field refresh for the two "
+            "allowlisted Goszakupki tenders."
+        ),
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Apply the refresh only when --plan-digest matches a freshly rebuilt plan.",
+    )
+    parser.add_argument(
+        "--plan-digest",
+        help="Digest from a reviewed read-only plan; required with --execute.",
+    )
+    args = parser.parse_args()
+    if args.plan_digest and not args.execute:
+        parser.error("--plan-digest is only valid with --execute")
+    if args.execute and not args.plan_digest:
+        parser.error("--execute requires the reviewed --plan-digest")
+
+    try:
+        if args.execute:
+            plan = execute_customer_refresh_plan(reviewed_digest=args.plan_digest)
+            plan["applied"] = True
+        else:
+            plan = build_customer_refresh_plan()
+            plan.pop("_records", None)
+            plan["applied"] = False
+    except CustomerRefreshError as exc:
+        parser.exit(2, f"Refresh refused: {exc}\n")
+
+    print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def show_tenders() -> None:
@@ -277,7 +319,6 @@ def clean() -> None:
         tender_count = session.query(Tender).delete()
         session.commit()
     print(f"Cleaned database: deleted {match_count} matches and {tender_count} tenders.")
-
 
 
 

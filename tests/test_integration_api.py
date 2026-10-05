@@ -12,6 +12,7 @@ from apps.api.auth import validate_security_config
 from belzakupki_db.base import Base
 from belzakupki_db.models import Tenant, User, SearchProfile, TenderSource, Tender, TenderDocument, TenderMatch
 from belzakupki_db.session import get_session
+from worker.sources.goszakupki_by import parse_tender_details_html
 
 
 @pytest.fixture
@@ -156,6 +157,34 @@ def test_tender_detail_and_document_download_are_tenant_scoped(integration, monk
     monkeypatch.delenv("INTEGRATION_PROFILE_IDS")
     monkeypatch.setenv("INTEGRATION_TENANT_ID", "2")
     assert client.get("/api/v1/tenders/test_source/0", headers=headers).status_code == 404
+
+
+def test_goszakupki_source_customer_fields_reach_scoped_api(integration):
+    from pathlib import Path
+
+    client, session, matches, headers = integration
+    html = Path(__file__).parent.joinpath(
+        "fixtures/goszakupki_customer_details.html"
+    ).read_text(encoding="utf-8")
+    tender = matches[0].tender
+    tender.customer_name = "Организация-заказчик"
+    tender.raw_data = parse_tender_details_html(html)
+    session.commit()
+
+    response = client.get("/api/v1/tenders/test_source/0", headers=headers)
+    assert response.status_code == 200, response.text
+    customer = response.json()["customer"]
+    assert customer == {
+        "name": "Организация-заказчик",
+        "unp": "300050210",
+        "legal_address": "г. Минск, ул. Примерная, 12",
+        "postal_address": None,
+        "contacts": {
+            "name": "Иванов Иван Иванович",
+            "phone": "+375 29 123-45-67",
+            "email": "customer@example.by",
+        },
+    }
 
 
 def test_document_download_validates_each_redirect(monkeypatch):
