@@ -592,6 +592,23 @@ def get_pending_ai_analysis_max_id(session: Session, source_code: str) -> int | 
     return session.execute(stmt).scalar_one_or_none()
 
 
+def resolve_profile_niche(profile: SearchProfile) -> str:
+    """Use the profile's own niche; never assume an unrelated HVAC preset."""
+    from belzakupki_db.presets import PRESETS
+
+    explicit = (profile.niche_description or "").strip()
+    if explicit:
+        return explicit
+    preset = PRESETS.get((profile.preset_code or "").strip(), {})
+    description = (preset.get("description") or "").strip()
+    if description:
+        return description
+    keywords = [word.strip() for word in (profile.keywords or []) if word.strip()]
+    if keywords:
+        return "Поиск тендеров по ключевым словам: " + ", ".join(keywords)
+    return "Общий поиск тендеров без заданной отраслевой специализации"
+
+
 def run_ai_analysis_for_new_matches(
     session: Session,
     source_code: str,
@@ -617,6 +634,7 @@ def run_ai_analysis_for_new_matches(
         )
         .order_by(TenderMatch.id.asc())
         .limit(AI_ANALYSIS_BATCH_SIZE)
+        .with_for_update(of=TenderMatch, skip_locked=True)
     )
     if through_id is not None:
         stmt = stmt.where(TenderMatch.id <= through_id)
@@ -679,205 +697,199 @@ def run_ai_analysis_for_new_matches(
             shutil.rmtree(temp_dir, ignore_errors=True)
         return AIAnalysisBatch(selected_count=0, last_selected_id=None)
 
-    from belzakupki_db.presets import PRESETS
+    from belzakupki_db.billing import reserve_ai_credit
 
     for match in matches:
         tender = match.tender
         logger.info(f"AI Analyzing match {match.id} (Tender: {tender.title})")
 
         profile = match.profile
-        default_hvac = PRESETS["hvac"]["description"]
-        niche_description = profile.niche_description or default_hvac
+        niche_description = resolve_profile_niche(profile)
         keywords = profile.keywords or []
         negative_keywords = profile.negative_keywords or []
 
         tenant_id = profile.tenant_id
-        if tenant_id:
-            from belzakupki_db.billing import can_use_ai_credits
-            if not can_use_ai_credits(session, tenant_id):
-                logger.info(f"AI credits exhausted or subscription expired for tenant {tenant_id}. Bypassing AI analysis for match {match.id}.")
-                match.ai_relevance = True
-                match.ai_analysis = {
-                    "relevant": True,
-                    "explanation": "Анализ пропущен по лимиту тарифа (морфологический скоринг сохранен)",
-                    "bypassed": True,
-                    "limit_exceeded": True
-                }
-                session.add(match)
-                session.flush()
-                continue
-
         try:
-            # Stage 1: Metadata-based relevance check
-            metadata_analysis = analyze_relevance_by_metadata(
-                title=tender.title,
-                customer=tender.customer_name or "Не указан",
-                niche_description=niche_description,
-                keywords=keywords,
-                negative_keywords=negative_keywords,
-                description=tender.description,
-            )
+            with reserve_ai_credit(session, tenant_id) as credit:
+                if not credit.available:
+                    logger.info(f"AI credits exhausted or subscription expired for tenant {tenant_id}. Bypassing AI analysis for match {match.id}.")
+                    match.ai_relevance = True
+                    match.ai_analysis = {
+                        "relevant": True,
+                        "explanation": "Анализ пропущен по лимиту тарифа (морфологический скоринг сохранен)",
+                        "bypassed": True,
+                        "limit_exceeded": True
+                    }
+                    session.add(match)
+                    session.flush()
+                    continue
 
-            if metadata_analysis is None:
-                logger.warning(f"DeepSeek metadata analysis returned None for match {match.id}. Skipping for now.")
-                continue
+                # Stage 1: Metadata-based relevance check
+                metadata_analysis = analyze_relevance_by_metadata(
+                    title=tender.title,
+                    customer=tender.customer_name or "Не указан",
+                    niche_description=niche_description,
+                    keywords=keywords,
+                    negative_keywords=negative_keywords,
+                    description=tender.description,
+                )
 
-            is_relevant = metadata_analysis.get("relevant", False)
-            if not is_relevant:
-                logger.info(f"Tender {tender.id} rejected by AI Stage 1 (metadata). Explanation: {metadata_analysis.get('explanation')}")
-                match.ai_relevance = False
-                match.ai_analysis = {
-                    "relevant": False,
-                    "explanation": metadata_analysis.get("explanation", "Отклонено на этапе проверки метаданных"),
-                    "stage": 1,
-                    "provider": metadata_analysis.get("provider"),
-                    "model": metadata_analysis.get("model"),
-                }
-                match.status = MatchStatus.REJECTED_BY_AI
+                if metadata_analysis is None:
+                    logger.warning(f"DeepSeek metadata analysis returned None for match {match.id}. Skipping for now.")
+                    continue
+
+                is_relevant = metadata_analysis.get("relevant", False)
+                if not is_relevant:
+                    logger.info(f"Tender {tender.id} rejected by AI Stage 1 (metadata). Explanation: {metadata_analysis.get('explanation')}")
+                    match.ai_relevance = False
+                    match.ai_analysis = {
+                        "relevant": False,
+                        "explanation": metadata_analysis.get("explanation", "Отклонено на этапе проверки метаданных"),
+                        "stage": 1,
+                        "provider": metadata_analysis.get("provider"),
+                        "model": metadata_analysis.get("model"),
+                    }
+                    match.status = MatchStatus.REJECTED_BY_AI
+                    session.add(match)
+                    session.flush()
+                    credit.consumed = True
+                    continue
+
+                # Stage 2: Deep check with documents
+                # 1. Fetch attachments
+                attachments = fetch_tender_attachments(tender.url)
+                logger.info(f"Found {len(attachments)} attachments for tender {tender.id}")
+
+                raw_data = dict(tender.raw_data or {})
+                raw_data["attachments"] = attachments
+                tender.raw_data = raw_data
+                session.add(tender)
+
+                text_content = ""
+                if not attachments:
+                    logger.info(f"No attachments found for tender {tender.id}. Analyzing description/title.")
+                    text_content = tender.description or tender.title
+                else:
+                    text_parts = []
+                    attachments_to_process = attachments[:ATTACHMENTS_PER_TENDER_LIMIT]
+                    if len(attachments) > len(attachments_to_process):
+                        logger.warning(
+                            "Tender {} has {} attachments; processing is capped at {}",
+                            tender.id,
+                            len(attachments),
+                            ATTACHMENTS_PER_TENDER_LIMIT,
+                        )
+                    accumulated_text_chars = 0
+                    for idx, att in enumerate(attachments_to_process):
+                        file_name = att["name"]
+                        file_url = att["url"]
+
+                        clean_name = "".join(c for c in file_name if c.isalnum() or c in (".", "_", "-")).strip()
+                        if not clean_name:
+                            clean_name = f"doc_{idx}"
+
+                        local_path = os.path.join(temp_dir, f"{tender.id}_{idx}_{clean_name}")
+
+                        # Download
+                        try:
+                            if source_code == "goszakupki_by":
+                                from worker.sources.goszakupki_by import build_headers, should_verify_ssl
+                                verify = should_verify_ssl()
+                                headers = build_headers()
+                            elif source_code == "butb_by":
+                                from worker.sources.butb_by import should_verify_ssl, USER_AGENT
+                                verify = should_verify_ssl()
+                                headers = {"User-Agent": USER_AGENT}
+                            else:
+                                from worker.sources.icetrade_by import build_headers, should_verify_ssl
+                                verify = should_verify_ssl()
+                                headers = build_headers()
+
+                            with httpx.Client(follow_redirects=True, headers=headers, verify=verify, timeout=20) as client:
+                                if source_code == "goszakupki_by":
+                                    client.get("https://goszakupki.by")
+                                elif source_code == "butb_by":
+                                    client.get("https://zakupki.butb.by/")
+                            
+                                MAX_SIZE_LIMIT = 15 * 1024 * 1024
+                                with client.stream("GET", file_url) as r:
+                                    r.raise_for_status()
+                                    content_length = r.headers.get("Content-Length")
+                                    if content_length and int(content_length) > MAX_SIZE_LIMIT:
+                                        raise ValueError(f"File size exceeds limit: {content_length} bytes")
+                                
+                                    total_bytes = 0
+                                    with open(local_path, "wb") as f:
+                                        for chunk in r.iter_bytes(chunk_size=8192):
+                                            total_bytes += len(chunk)
+                                            if total_bytes > MAX_SIZE_LIMIT:
+                                                raise ValueError("File size exceeded limit of 15 MB during download")
+                                            f.write(chunk)
+
+                            file_text = extract_text_from_file(local_path)
+                            if file_text:
+                                heading = f"--- File: {file_name} ---\n"
+                                remaining_chars = max(
+                                    AI_DOCUMENT_TEXT_LIMIT
+                                    - accumulated_text_chars
+                                    - len(heading),
+                                    0,
+                                )
+                                if remaining_chars:
+                                    bounded_file_text = file_text[:remaining_chars]
+                                    text_parts.append(f"{heading}{bounded_file_text}")
+                                    accumulated_text_chars += len(heading) + len(
+                                        bounded_file_text
+                                    )
+                            
+                                from belzakupki_db.models import TenderDocument
+                                # Save to TenderDocument, update if already exists
+                                doc = session.query(TenderDocument).filter(
+                                    TenderDocument.tender_id == tender.id,
+                                    TenderDocument.file_name == file_name
+                                ).first()
+                                if doc:
+                                    doc.content = file_text
+                                else:
+                                    doc = TenderDocument(
+                                        tender_id=tender.id,
+                                        file_name=file_name,
+                                        content=file_text
+                                    )
+                                    session.add(doc)
+                                session.flush()
+                        except Exception as e:
+                            logger.warning(f"Failed to download/extract file {file_name}: {e}")
+                        finally:
+                            if os.path.exists(local_path):
+                                os.remove(local_path)
+
+                    text_content = "\n\n".join(text_parts)[:AI_DOCUMENT_TEXT_LIMIT]
+
+                # Analyze
+                analysis = analyze_tender_relevance(
+                    title=tender.title,
+                    customer=tender.customer_name or "Не указан",
+                    documents_text=text_content or tender.title,
+                    niche_description=niche_description,
+                    keywords=keywords,
+                    negative_keywords=negative_keywords,
+                )
+
+                if analysis is not None:
+                    match.ai_relevance = analysis.get("relevant", False)
+                    match.ai_analysis = analysis
+                    if not match.ai_relevance:
+                        logger.info(f"Tender {tender.id} rejected by AI. Setting status to 'rejected_by_ai'.")
+                        match.status = MatchStatus.REJECTED_BY_AI
+                    else:
+                        logger.info(f"Tender {tender.id} approved by AI. Keeping status 'new'.")
+                    credit.consumed = True
+                else:
+                    logger.warning(f"AI analysis returned None for match {match.id}")
+
                 session.add(match)
                 session.flush()
-                if tenant_id:
-                    from belzakupki_db.billing import increment_ai_credits
-                    increment_ai_credits(session, tenant_id)
-                continue
-
-            # Stage 2: Deep check with documents
-            # 1. Fetch attachments
-            attachments = fetch_tender_attachments(tender.url)
-            logger.info(f"Found {len(attachments)} attachments for tender {tender.id}")
-
-            raw_data = dict(tender.raw_data or {})
-            raw_data["attachments"] = attachments
-            tender.raw_data = raw_data
-            session.add(tender)
-
-            text_content = ""
-            if not attachments:
-                logger.info(f"No attachments found for tender {tender.id}. Analyzing description/title.")
-                text_content = tender.description or tender.title
-            else:
-                text_parts = []
-                attachments_to_process = attachments[:ATTACHMENTS_PER_TENDER_LIMIT]
-                if len(attachments) > len(attachments_to_process):
-                    logger.warning(
-                        "Tender {} has {} attachments; processing is capped at {}",
-                        tender.id,
-                        len(attachments),
-                        ATTACHMENTS_PER_TENDER_LIMIT,
-                    )
-                accumulated_text_chars = 0
-                for idx, att in enumerate(attachments_to_process):
-                    file_name = att["name"]
-                    file_url = att["url"]
-
-                    clean_name = "".join(c for c in file_name if c.isalnum() or c in (".", "_", "-")).strip()
-                    if not clean_name:
-                        clean_name = f"doc_{idx}"
-
-                    local_path = os.path.join(temp_dir, f"{tender.id}_{idx}_{clean_name}")
-
-                    # Download
-                    try:
-                        if source_code == "goszakupki_by":
-                            from worker.sources.goszakupki_by import build_headers, should_verify_ssl
-                            verify = should_verify_ssl()
-                            headers = build_headers()
-                        elif source_code == "butb_by":
-                            from worker.sources.butb_by import should_verify_ssl, USER_AGENT
-                            verify = should_verify_ssl()
-                            headers = {"User-Agent": USER_AGENT}
-                        else:
-                            from worker.sources.icetrade_by import build_headers, should_verify_ssl
-                            verify = should_verify_ssl()
-                            headers = build_headers()
-
-                        with httpx.Client(follow_redirects=True, headers=headers, verify=verify, timeout=20) as client:
-                            if source_code == "goszakupki_by":
-                                client.get("https://goszakupki.by")
-                            elif source_code == "butb_by":
-                                client.get("https://zakupki.butb.by/")
-                            
-                            MAX_SIZE_LIMIT = 15 * 1024 * 1024
-                            with client.stream("GET", file_url) as r:
-                                r.raise_for_status()
-                                content_length = r.headers.get("Content-Length")
-                                if content_length and int(content_length) > MAX_SIZE_LIMIT:
-                                    raise ValueError(f"File size exceeds limit: {content_length} bytes")
-                                
-                                total_bytes = 0
-                                with open(local_path, "wb") as f:
-                                    for chunk in r.iter_bytes(chunk_size=8192):
-                                        total_bytes += len(chunk)
-                                        if total_bytes > MAX_SIZE_LIMIT:
-                                            raise ValueError("File size exceeded limit of 15 MB during download")
-                                        f.write(chunk)
-
-                        file_text = extract_text_from_file(local_path)
-                        if file_text:
-                            heading = f"--- File: {file_name} ---\n"
-                            remaining_chars = max(
-                                AI_DOCUMENT_TEXT_LIMIT
-                                - accumulated_text_chars
-                                - len(heading),
-                                0,
-                            )
-                            if remaining_chars:
-                                bounded_file_text = file_text[:remaining_chars]
-                                text_parts.append(f"{heading}{bounded_file_text}")
-                                accumulated_text_chars += len(heading) + len(
-                                    bounded_file_text
-                                )
-                            
-                            from belzakupki_db.models import TenderDocument
-                            # Save to TenderDocument, update if already exists
-                            doc = session.query(TenderDocument).filter(
-                                TenderDocument.tender_id == tender.id,
-                                TenderDocument.file_name == file_name
-                            ).first()
-                            if doc:
-                                doc.content = file_text
-                            else:
-                                doc = TenderDocument(
-                                    tender_id=tender.id,
-                                    file_name=file_name,
-                                    content=file_text
-                                )
-                                session.add(doc)
-                            session.flush()
-                    except Exception as e:
-                        logger.warning(f"Failed to download/extract file {file_name}: {e}")
-                    finally:
-                        if os.path.exists(local_path):
-                            os.remove(local_path)
-
-                text_content = "\n\n".join(text_parts)[:AI_DOCUMENT_TEXT_LIMIT]
-
-            # Analyze
-            analysis = analyze_tender_relevance(
-                title=tender.title,
-                customer=tender.customer_name or "Не указан",
-                documents_text=text_content or tender.title,
-                niche_description=niche_description,
-                keywords=keywords,
-                negative_keywords=negative_keywords,
-            )
-
-            if analysis is not None:
-                match.ai_relevance = analysis.get("relevant", False)
-                match.ai_analysis = analysis
-                if not match.ai_relevance:
-                    logger.info(f"Tender {tender.id} rejected by AI. Setting status to 'rejected_by_ai'.")
-                    match.status = MatchStatus.REJECTED_BY_AI
-                else:
-                    logger.info(f"Tender {tender.id} approved by AI. Keeping status 'new'.")
-                if tenant_id:
-                    from belzakupki_db.billing import increment_ai_credits
-                    increment_ai_credits(session, tenant_id)
-            else:
-                logger.warning(f"AI analysis returned None for match {match.id}")
-
-            session.add(match)
-            session.flush()
 
         except Exception as e:
             logger.error(f"Error during AI analysis of match {match.id}: {e}")

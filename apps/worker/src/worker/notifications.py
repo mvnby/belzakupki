@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import html
 import os
 import time
@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender, SearchProfile
@@ -17,6 +17,8 @@ from worker.resource_limits import positive_int_env
 
 
 NOTIFICATION_BATCH_SIZE = positive_int_env("WORKER_NOTIFICATION_BATCH_SIZE", 50)
+NOTIFICATION_MAX_ATTEMPTS = positive_int_env("WORKER_NOTIFICATION_MAX_ATTEMPTS", 5)
+NOTIFICATION_RETRY_SECONDS = positive_int_env("WORKER_NOTIFICATION_RETRY_SECONDS", 60)
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
@@ -41,6 +43,8 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str, reply_markup:
     if response.status_code != 200:
         logger.error(f"Failed to send Telegram message: {response.text}")
         response.raise_for_status()
+    if response.json().get("ok") is not True:
+        raise RuntimeError("Telegram did not confirm notification delivery")
 
 
 def format_tender_message(match: TenderMatch) -> str:
@@ -104,154 +108,151 @@ def format_tender_message(match: TenderMatch) -> str:
     return "\n".join([line for line in message_lines if line is not None])
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _deliver_match(session: Session, match: TenderMatch, bot_token: str | None) -> int:
+    deadline = match.tender.deadline_at
+    if not deadline and match.tender.raw_data:
+        from worker.ingest import parse_deadline_string
+        deadline = parse_deadline_string(match.tender.raw_data.get("deadline"))
+        if deadline:
+            match.tender.deadline_at = deadline
+    if deadline and _as_utc(deadline) < datetime.now(timezone.utc):
+        match.status = MatchStatus.EXPIRED
+        return 0
+
+    channels = list(session.scalars(select(NotificationChannel).where(
+        NotificationChannel.profile_id == match.profile_id,
+        NotificationChannel.is_active.is_(True),
+    ).order_by(NotificationChannel.id)))
+    if not channels:
+        match.status = MatchStatus.PROCESSED
+        return 0
+
+    all_sent = True
+    for channel in channels:
+        log = session.scalar(select(NotificationLog).where(
+            NotificationLog.match_id == match.id,
+            NotificationLog.channel_id == channel.id,
+        ))
+        if log is not None and log.status == NotificationStatus.SENT:
+            continue
+        now = datetime.now(timezone.utc)
+        if log is not None and (
+            log.attempt_count >= NOTIFICATION_MAX_ATTEMPTS
+            or (log.next_attempt_at and _as_utc(log.next_attempt_at) > now)
+        ):
+            all_sent = False
+            continue
+        if log is None:
+            log = NotificationLog(match_id=match.id, channel_id=channel.id,
+                                  attempt_count=0)
+            session.add(log)
+        log.attempt_count += 1
+        log.status = NotificationStatus.PENDING
+        log.error_message = None
+        log.next_attempt_at = None
+        session.flush()
+        try:
+            if channel.type != "telegram":
+                raise ValueError(f"Unsupported notification channel type: {channel.type}")
+            if not bot_token or bot_token == "your-bot-token":
+                raise ValueError("TELEGRAM_BOT_TOKEN is not configured")
+            chat_id = (channel.config or {}).get("chat_id")
+            if not chat_id or chat_id == "your-chat-id":
+                raise ValueError("Notification channel chat_id is not configured")
+            text = format_tender_message(match)
+            reply_markup = {"inline_keyboard": [[
+                {"text": "🔎 Подробнее", "callback_data": f"detail:{match.id}"},
+                {"text": "✅ Принять", "callback_data": f"accept:{match.id}"},
+                {"text": "❌ Отклонить", "callback_data": f"reject:{match.id}"},
+            ]]}
+            try:
+                send_telegram_message(bot_token, str(chat_id), text, reply_markup)
+            finally:
+                time.sleep(3.0)
+        except Exception as error:
+            all_sent = False
+            log.status = NotificationStatus.ERROR
+            message = str(error)
+            log.error_message = message.replace(bot_token, "<redacted>") if bot_token else message
+            if log.attempt_count < NOTIFICATION_MAX_ATTEMPTS:
+                delay = min(NOTIFICATION_RETRY_SECONDS * 2 ** min(log.attempt_count - 1, 10), 3600)
+                log.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            logger.warning("Notification {} failed (attempt {}/{}): {}",
+                           log.id, log.attempt_count, NOTIFICATION_MAX_ATTEMPTS,
+                           log.error_message)
+        else:
+            log.status = NotificationStatus.SENT
+            log.sent_at = datetime.now(timezone.utc)
+
+    if all_sent:
+        match.status = MatchStatus.PROCESSED
+        return 1
+    return 0
+
+
 def _dispatch_notification_batch(
     session: Session,
     tenant_id: int | None = None,
+    *,
+    due_at: datetime | None = None,
+    through_id: int | None = None,
 ) -> tuple[int, int]:
-    """Извлекает из базы данных новые совпадения и рассылает их по каналам уведомлений.
-
-    - Исключает совпадения, забракованные ИИ на этапе экспресс-анализа.
-    - Исключает тендеры, у которых истек дедлайн подачи заявок.
-    - Для каждого активного канала (например, Telegram) отправляет сообщение с инлайн-кнопками.
-    - Фиксирует факты отправки в таблице notification_logs.
-    - Переводит статус совпадения в 'processed'.
-    """
     if os.getenv("WORKER_NOTIFICATIONS_ENABLED", "true").lower() not in {"1", "true", "yes"}:
-        logger.info("Notification delivery is disabled by runtime configuration")
         return 0, 0
-
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    
-    # Находим все совпадения со статусом 'new'
+    due_at = due_at or datetime.now(timezone.utc)
+    active_channels = select(NotificationChannel.id).where(
+        NotificationChannel.profile_id == TenderMatch.profile_id,
+        NotificationChannel.is_active.is_(True),
+    )
+    channel_logs = active_channels.outerjoin(NotificationLog, and_(
+        NotificationLog.channel_id == NotificationChannel.id,
+        NotificationLog.match_id == TenderMatch.id,
+    ))
+    unfinished_channels = channel_logs.where(or_(
+        NotificationLog.id.is_(None), NotificationLog.status != NotificationStatus.SENT,
+    ))
+    due_channels = channel_logs.where(or_(
+        NotificationLog.id.is_(None),
+        and_(NotificationLog.status != NotificationStatus.SENT,
+             NotificationLog.attempt_count < NOTIFICATION_MAX_ATTEMPTS,
+             or_(NotificationLog.next_attempt_at.is_(None),
+                 NotificationLog.next_attempt_at <= due_at)),
+    ))
     stmt = (
         select(TenderMatch)
-        .options(
-            joinedload(TenderMatch.tender).joinedload(Tender.source),
-            joinedload(TenderMatch.profile),
-        )
-        .where(
-            TenderMatch.status == MatchStatus.NEW,
-            TenderMatch.ai_relevance.is_(True),
-        )
-        .order_by(TenderMatch.created_at.asc())
+        .options(joinedload(TenderMatch.tender).joinedload(Tender.source),
+                 joinedload(TenderMatch.profile))
+        .where(TenderMatch.status == MatchStatus.NEW,
+               TenderMatch.ai_relevance.is_(True),
+               or_(~unfinished_channels.exists(), due_channels.exists()))
+        .order_by(TenderMatch.id)
         .limit(NOTIFICATION_BATCH_SIZE)
+        .with_for_update(of=TenderMatch, skip_locked=True)
+        .execution_options(populate_existing=True)
     )
     if tenant_id is not None:
         stmt = stmt.join(TenderMatch.profile).where(SearchProfile.tenant_id == tenant_id)
-
-    matches = list(session.execute(stmt).scalars())
-    
-    if not matches:
-        logger.info("No new tender matches to notify.")
-        return 0, 0
-        
-    logger.info(f"Found {len(matches)} new tender matches to process.")
-    dispatched_count = 0
-    
-    for match in matches:
-        # Проверяем, не забракован ли тендер ИИ
-        if match.ai_relevance is False:
-            logger.info(
-                f"Tender match {match.id} (tender_id={match.tender.id}) was rejected by AI. "
-                "Marking as 'rejected_by_ai' and skipping notification."
-            )
-            match.status = MatchStatus.REJECTED_BY_AI
+    if through_id is not None:
+        stmt = stmt.where(TenderMatch.id <= through_id)
+    match_ids = [match.id for match in session.execute(stmt).scalars()]
+    dispatched = 0
+    for match_id in match_ids:
+        # The preceding match commits its own delivery results. Reacquire this
+        # row and recheck eligibility after that commit released the batch locks.
+        match = session.execute(stmt.where(TenderMatch.id == match_id)).scalar_one_or_none()
+        if match is None:
             continue
-
-        # Проверяем, не истек ли дедлайн подачи заявок
-        deadline_at = match.tender.deadline_at
-        if not deadline_at and match.tender.raw_data:
-            from worker.ingest import parse_deadline_string
-            deadline_at = parse_deadline_string(match.tender.raw_data.get("deadline"))
-            if deadline_at:
-                match.tender.deadline_at = deadline_at
-                session.add(match.tender)  # Явно помечаем для сохранения
-
-        if deadline_at and deadline_at < datetime.now(timezone.utc):
-            logger.info(
-                f"Tender match {match.id} (tender_id={match.tender.id}) has expired deadline "
-                f"({deadline_at}). Marking as expired and skipping notification."
-            )
-            match.status = MatchStatus.EXPIRED
-            continue
-        # Находим активные каналы уведомлений для профиля этого совпадения
-        channels_stmt = (
-            select(NotificationChannel)
-            .where(
-                NotificationChannel.profile_id == match.profile_id,
-                NotificationChannel.is_active == True,
-            )
-        )
-        channels = list(session.execute(channels_stmt).scalars())
-        
-        if not channels:
-            logger.warning(
-                f"No active notification channels found for profile: {match.profile.name} (id={match.profile_id}). "
-                f"Skipping match (id={match.id})."
-            )
-            match.status = MatchStatus.PROCESSED
-            continue
-            
-        for channel in channels:
-            log = NotificationLog(
-                match_id=match.id,
-                channel_id=channel.id,
-                status=NotificationStatus.PENDING,
-                created_at=datetime.now(timezone.utc),
-            )
-            session.add(log)
-            session.flush()  # Получаем ID лога
-            
-            if channel.type == "telegram":
-                if not bot_token or bot_token == "your-bot-token":
-                    error_msg = "TELEGRAM_BOT_TOKEN is not configured or set to default value."
-                    logger.error(error_msg)
-                    log.status = NotificationStatus.ERROR
-                    log.error_message = error_msg
-                    continue
-                    
-                chat_id = channel.config.get("chat_id")
-                if not chat_id or chat_id == "your-chat-id":
-                    error_msg = "chat_id is not configured in NotificationChannel config."
-                    logger.error(error_msg)
-                    log.status = NotificationStatus.ERROR
-                    log.error_message = error_msg
-                    continue
-                    
-                try:
-                    text = format_tender_message(match)
-                    reply_markup = {
-                        "inline_keyboard": [
-                            [
-                                {"text": "🔎 Подробнее", "callback_data": f"detail:{match.id}"},
-                                {"text": "✅ Принять", "callback_data": f"accept:{match.id}"},
-                                {"text": "❌ Отклонить", "callback_data": f"reject:{match.id}"}
-                            ]
-                        ]
-                    }
-                    send_telegram_message(bot_token, str(chat_id), text, reply_markup)
-                    log.status = NotificationStatus.SENT
-                    log.sent_at = datetime.now(timezone.utc)
-                    logger.info(f"Notification log (id={log.id}) sent successfully.")
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.exception(f"Error sending Telegram notification for log {log.id}")
-                    log.status = NotificationStatus.ERROR
-                    log.error_message = error_msg
-                
-                time.sleep(3.0)  # prevent hitting Telegram rate limits (429)
-            else:
-                error_msg = f"Unsupported notification channel type: {channel.type}"
-                logger.error(error_msg)
-                log.status = NotificationStatus.ERROR
-                log.error_message = error_msg
-
-        match.status = MatchStatus.PROCESSED
-        dispatched_count += 1
-        
-    session.commit()
-    logger.info(f"Dispatched notifications for {dispatched_count} matches.")
-    return len(matches), dispatched_count
+        try:
+            dispatched += _deliver_match(session, match, os.getenv("TELEGRAM_BOT_TOKEN"))
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+    return len(match_ids), dispatched
 
 
 def dispatch_notifications(
@@ -260,24 +261,26 @@ def dispatch_notifications(
     *,
     drain: bool = False,
 ) -> int:
-    """Dispatch one bounded batch, or drain all currently eligible batches.
+    """Visit each due delivery in a fixed snapshot, in bounded batches.
 
-    The default preserves the existing CLI/API single-batch behavior. Worker
-    jobs use ``drain=True`` and release ORM objects between batches.
+    Errors schedule a later attempt; sent channels are never selected again.
+    A fixed due time prevents a long drain from retrying its own failures.
+    PostgreSQL match locks prevent simultaneous sends by competing workers.
     """
+    if os.getenv("WORKER_NOTIFICATIONS_ENABLED", "true").lower() not in {"1", "true", "yes"}:
+        return 0
+    due_at = datetime.now(timezone.utc)
+    through_id = session.scalar(select(func.max(TenderMatch.id))) if drain else None
     selected_count, dispatched_count = _dispatch_notification_batch(
-        session,
-        tenant_id,
+        session, tenant_id, due_at=due_at, through_id=through_id,
     )
     if not drain:
         return dispatched_count
-
     total_dispatched = dispatched_count
     while selected_count:
         session.expunge_all()
         selected_count, batch_dispatched = _dispatch_notification_batch(
-            session,
-            tenant_id,
+            session, tenant_id, due_at=due_at, through_id=through_id,
         )
         total_dispatched += batch_dispatched
     return total_dispatched
