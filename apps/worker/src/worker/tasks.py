@@ -22,7 +22,11 @@ from worker.resource_limits import positive_int_env
 from worker.results_progress import (
     read_results_progress, save_results_progress, RESULTS_SCAN_INTERVAL_SECONDS,
 )
-from worker.routing import run_local_profile_routing
+from worker.routing import (
+    get_pending_routing_max_id,
+    get_pending_routing_min_id,
+    run_local_profile_routing,
+)
 from worker.notifications import dispatch_notifications
 
 RESULTS_JOB_BATCH_SIZE = positive_int_env("WORKER_RESULTS_JOB_BATCH_SIZE", 5)
@@ -102,6 +106,25 @@ def _drain_all_ai_analysis(session) -> None:
         _run_stage(session, failures, f"ai:{source_code}",
                    partial(_drain_ai_analysis, session, source_code))
     _raise_stage_failures(failures)
+
+
+def _drain_local_profile_routing(session) -> int:
+    """Drain a stable unchecked snapshot; zero matches still count as progress."""
+    through_id = get_pending_routing_max_id(session)
+    if through_id is None:
+        return 0
+
+    matched_total = 0
+    pending_id = get_pending_routing_min_id(session, through_id=through_id)
+    while pending_id is not None:
+        # Each batch commits its checked flags/matches before enrichment.
+        matched_total += run_local_profile_routing(session, through_id=through_id)
+        session.expunge_all()
+        next_pending_id = get_pending_routing_min_id(session, through_id=through_id)
+        if next_pending_id is not None and next_pending_id <= pending_id:
+            raise RuntimeError("Local routing did not advance its pending cursor")
+        pending_id = next_pending_id
+    return matched_total
 
 
 def _drain_results_check(session) -> int:
@@ -220,7 +243,7 @@ def run_ingest_task_job(tenant_id: int | None = None) -> None:
             
             # 2. Local profile routing
             logger.info("RQ Worker: Running local profile routing")
-            _run_stage(session, failures, "routing", partial(run_local_profile_routing, session))
+            _run_stage(session, failures, "routing", partial(_drain_local_profile_routing, session))
             
             # 3. AI scoring / analysis for matched tenders
             logger.info("RQ Worker: Running AI analyses for matches")

@@ -46,7 +46,7 @@ def pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(tasks, function, stage(f"ingest:{source}"))
     monkeypatch.setattr(tasks, "_drain_ai_analysis",
                         lambda session, source: stage(f"ai:{source}")(session))
-    monkeypatch.setattr(tasks, "run_local_profile_routing", stage("routing"))
+    monkeypatch.setattr(tasks, "_drain_local_profile_routing", stage("routing"))
     monkeypatch.setattr(tasks, "dispatch_notifications", stage("notify"))
     monkeypatch.setattr(tasks, "SessionLocal", sessions)
     redis = MagicMock()
