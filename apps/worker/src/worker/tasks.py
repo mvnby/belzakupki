@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from functools import partial
 from loguru import logger
 from redis import Redis
 
@@ -30,6 +31,39 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 def get_redis() -> Redis:
     return Redis.from_url(REDIS_URL)
+
+
+class PipelineIncompleteError(RuntimeError):
+    """Independent stages completed, but failed stages still need an RQ retry."""
+
+
+def _run_stage(session, failures: list[str], name: str, operation) -> None:
+    """Keep successful work durable and leave a usable session after failure."""
+    try:
+        operation()
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        failures.append(f"{name}: {exc}")
+        logger.exception("RQ Worker: stage {} failed; continuing independent work", name)
+
+
+def _raise_stage_failures(failures: list[str]) -> None:
+    if failures:
+        raise PipelineIncompleteError("Pipeline incomplete; failed stages: " + "; ".join(failures))
+
+
+def _ingest_sources(session, *, profiles) -> list[str]:
+    failures: list[str] = []
+    for source_code, ingest in (
+        ("goszakupki_by", ingest_goszakupki_tenders),
+        ("icetrade_by", ingest_icetrade_tenders),
+        ("butb_by", ingest_butb_tenders),
+        ("gias_by", ingest_gias_tenders),
+    ):
+        _run_stage(session, failures, f"ingest:{source_code}",
+                   partial(ingest, session, profiles=profiles, limit=20, commit=False))
+    return failures
 
 
 def _drain_ai_analysis(session, source_code: str) -> int:
@@ -63,8 +97,11 @@ def _drain_ai_analysis(session, source_code: str) -> int:
 
 
 def _drain_all_ai_analysis(session) -> None:
+    failures: list[str] = []
     for source_code in ("goszakupki_by", "icetrade_by", "butb_by", "gias_by"):
-        _drain_ai_analysis(session, source_code)
+        _run_stage(session, failures, f"ai:{source_code}",
+                   partial(_drain_ai_analysis, session, source_code))
+    _raise_stage_failures(failures)
 
 
 def _drain_results_check(session) -> int:
@@ -108,15 +145,10 @@ def run_profile_task_job(profile_id: int) -> None:
             return
 
         logger.info("RQ Worker: running profile {}", profile_id)
-        ingest_goszakupki_tenders(session, profiles=[profile], limit=20)
-        ingest_icetrade_tenders(session, profiles=[profile], limit=20)
-        ingest_butb_tenders(session, profiles=[profile], limit=20)
-        ingest_gias_tenders(session, profiles=[profile], limit=20)
-        session.commit()
-
-        _drain_all_ai_analysis(session)
-
-        dispatch_notifications(session, drain=True)
+        failures = _ingest_sources(session, profiles=[profile])
+        _run_stage(session, failures, "ai", partial(_drain_all_ai_analysis, session))
+        _run_stage(session, failures, "notify", partial(dispatch_notifications, session, drain=True))
+        _raise_stage_failures(failures)
         # Deterministic RQ job identity prevents overlap while it runs. Stamp
         # completion only after the whole pipeline succeeds so a crash does not
         # postpone this profile for its full schedule interval.
@@ -184,28 +216,21 @@ def run_ingest_task_job(tenant_id: int | None = None) -> None:
             logger.info(f"RQ Worker: Found {active_profiles_count} active profiles in the system. Starting feed crawl...")
             
             # 1. Centralized Ingest (Feed mode, profiles=None)
-            logger.info("RQ Worker: Fetching feeds from goszakupki.by")
-            ingest_goszakupki_tenders(session, profiles=None, limit=20)
-            logger.info("RQ Worker: Fetching feeds from icetrade.by")
-            ingest_icetrade_tenders(session, profiles=None, limit=20)
-            logger.info("RQ Worker: Fetching feeds from butb.by")
-            ingest_butb_tenders(session, profiles=None, limit=20)
-            logger.info("RQ Worker: Fetching feeds from gias.by")
-            ingest_gias_tenders(session, profiles=None, limit=20)
-            session.commit()
+            failures = _ingest_sources(session, profiles=None)
             
             # 2. Local profile routing
             logger.info("RQ Worker: Running local profile routing")
-            run_local_profile_routing(session)
+            _run_stage(session, failures, "routing", partial(run_local_profile_routing, session))
             
             # 3. AI scoring / analysis for matched tenders
             logger.info("RQ Worker: Running AI analyses for matches")
-            _drain_all_ai_analysis(session)
+            _run_stage(session, failures, "ai", partial(_drain_all_ai_analysis, session))
             
             # 4. Dispatch notifications
             logger.info(f"RQ Worker: Dispatching notifications (tenant_id context: {tenant_id})")
-            dispatch_notifications(session, tenant_id=tenant_id, drain=True)
-            session.commit()
+            _run_stage(session, failures, "notify",
+                       partial(dispatch_notifications, session, tenant_id=tenant_id, drain=True))
+            _raise_stage_failures(failures)
             
         logger.info(f"RQ Worker: Ingest task for tenant_id={tenant_id} completed successfully")
     except Exception as e:

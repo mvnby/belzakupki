@@ -162,9 +162,13 @@ def test_profile_stamp_happens_only_after_success(
 
 @patch("worker.tasks.ingest_goszakupki_tenders", side_effect=RuntimeError("crawl failed"))
 @patch("worker.tasks.SessionLocal")
-def test_failed_profile_pipeline_is_not_stamped(session_local, ingest) -> None:
+def test_failed_profile_pipeline_is_not_stamped(session_local, ingest, monkeypatch) -> None:
+    from worker import tasks
     from worker.tasks import run_profile_task_job
 
+    for name in ("ingest_icetrade_tenders", "ingest_butb_tenders", "ingest_gias_tenders",
+                 "_drain_all_ai_analysis", "dispatch_notifications"):
+        monkeypatch.setattr(tasks, name, MagicMock())
     profile = MagicMock(id=42, is_active=True, last_run_at=None)
     session = session_local.return_value.__enter__.return_value
     session.query.return_value.filter.return_value.one_or_none.return_value = profile
