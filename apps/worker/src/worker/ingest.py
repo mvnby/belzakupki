@@ -18,6 +18,7 @@ from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSourc
 from belzakupki_db.enums import MatchStatus
 from worker.scoring import score_text
 from worker.resource_limits import positive_int_env
+from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP
 from worker.sources.goszakupki_by import (
     BASE_URL,
     fetch_hvac_vitebsk_tenders,
@@ -202,13 +203,18 @@ def upsert_tender(
 def extract_tender_region(tender: Tender) -> str | None:
     """Определяет канонический код региона для тендера.
     
-    Сначала проверяет поле region в raw_data, затем пробует извлечь 
-    из названия заказчика, наименования или описания закупки.
+    Сначала проверяет поле region в raw_data, затем единственный канонический
+    регион ограниченного поиска и название заказчика/закупки.
     """
     if tender.raw_data and isinstance(tender.raw_data, dict):
         reg = tender.raw_data.get("region")
         if reg:
             return str(reg)
+        search_regions = tender.raw_data.get("search_regions")
+        if isinstance(search_regions, list) and len(search_regions) == 1:
+            search_region = search_regions[0]
+            if isinstance(search_region, str) and search_region in GOSZAKUPKI_REGION_MAP:
+                return search_region
             
     text = " ".join(
         val
