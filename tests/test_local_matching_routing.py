@@ -15,7 +15,34 @@ from belzakupki_db.base import Base
 from belzakupki_db.models import TenderSource, Tender, SearchProfile, TenderMatch
 from belzakupki_db.enums import MatchStatus
 from worker.routing import run_local_profile_routing
+from worker.ingest import extract_tender_region, score_tender
 from unittest.mock import patch
+
+
+@pytest.mark.parametrize("raw_data, expected", [
+    ({"search_regions": ["2"]}, "2"),
+    ({"region": "1", "search_regions": ["2"]}, "1"),
+    ({"search_regions": []}, None),
+    ({"search_regions": ["1", "2"]}, None),
+    ({"search_regions": ["2", "2"]}, None),
+    ({"search_regions": ["99"]}, None),
+    ({"search_regions": [2]}, None),
+    ({"search_regions": [{}]}, None),
+    ({"search_regions": "2"}, None),
+    ({}, None),
+])
+def test_region_requires_unambiguous_canonical_search_context(raw_data, expected):
+    tender = Tender(title="Обслуживание кондиционеров", raw_data=raw_data)
+    assert extract_tender_region(tender) == expected
+
+
+def test_ambiguous_search_context_preserves_text_region_fallback():
+    tender = Tender(
+        title="Обслуживание кондиционеров",
+        customer_name="Витебская областная больница",
+        raw_data={"search_regions": ["1", "2"]},
+    )
+    assert extract_tender_region(tender) == "2"
 
 @pytest.fixture
 def db_session():
@@ -28,6 +55,36 @@ def db_session():
         yield session
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("customer,title", [
+    ("Дубровенский районный исполнительный комитет", "Ремонт вентиляции"),
+    ("Толочинская центральная районная больница", "Обслуживание кондиционеров"),
+    ("Браславская центральная районная больница", "Ремонт кондиционера"),
+    ("Лиозненская центральная районная больница", "Обслуживание кондиционеров"),
+])
+def test_regional_search_matches_hvac_outside_regional_capital(db_session, customer, title):
+    source = TenderSource(code="goszakupki_by", name="Goszakupki", base_url="https://example.com")
+    profile = SearchProfile(
+        name="Vitebsk HVAC", keywords=["кондиционер", "вентиляция"],
+        negative_keywords=["автомобильные"], regions=["2"],
+        min_score=Decimal("20"), is_active=True,
+    )
+    db_session.add_all([source, profile])
+    db_session.flush()
+    tender = Tender(
+        source_id=source.id, external_id="regional-hvac", title=title,
+        customer_name=customer, url="https://example.com/tender",
+        raw_data={"search_regions": ["2"]},
+    )
+    db_session.add(tender)
+    db_session.flush()
+
+    assert score_tender(db_session, tender) == 1
+    db_session.flush()
+    match = db_session.query(TenderMatch).one()
+    assert match.profile_id == profile.id
+    assert match.score >= profile.min_score
 
 @patch("worker.routing.enrich_tender_if_needed")
 def test_run_local_profile_routing(mock_enrich, db_session: Session):
