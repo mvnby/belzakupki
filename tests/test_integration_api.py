@@ -105,6 +105,30 @@ def test_profile_allowlist_and_inactive_tenant(integration, monkeypatch):
     assert client.get("/api/v1/opportunities", headers=headers).status_code == 403
 
 
+def test_feed_exports_existing_gias_reference_without_changing_native_access(integration):
+    client, session, matches, headers = integration
+    tender = matches[0].tender
+    tender.source.code = "gias_by"
+    tender.source.base_url = "https://gias.by"
+    tender.url = "https://gias.by/gias/#/purchase/current/135259"
+    tender.external_id = "135259"
+    original = "https://goszakupki.by/single-source-reference/view/3732488"
+    tender.raw_data = {"raw_data": {
+        "auctionUrl": original,
+        "oneSourcePurchase": {"auctionUrl": "https://goszakupki.by/request/view/3775146"},
+    }}
+    session.commit()
+    exported = client.get("/api/v1/opportunities", headers=headers).json()["items"][0]["tender"]
+    assert exported["canonical_url"] == original
+    assert exported["source"] == "gias_by"
+    assert exported["external_id"] == "135259"
+    assert exported["url"] == tender.url
+    detail = client.get("/api/v1/tenders/gias_by/135259", headers=headers)
+    assert detail.status_code == 200 and detail.json()["source_url"] == tender.url
+    other = matches[1].tender
+    assert client.get(f"/api/v1/tenders/gias_by/{other.external_id}", headers=headers).status_code == 404
+
+
 def test_tender_detail_and_document_download_are_tenant_scoped(integration, monkeypatch):
     client, session, matches, headers = integration
     tender = matches[0].tender

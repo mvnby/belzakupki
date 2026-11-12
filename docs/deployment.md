@@ -147,3 +147,29 @@ address, and contact fields. Empty upstream fields never erase saved values;
 all other raw data and document rows are preserved. If a row or source value
 changed after review, make and inspect a new plan. Never substitute the general
 ingest command for this targeted procedure.
+
+## IceTrade 403 investigation
+
+On 2026-11-12 at approximately 14:14 UTC, a diagnostic request using the
+collector's existing `_create_client(should_verify_ssl())` and request headers
+to `https://icetrade.by/tenders/all/view/1407896` returned HTTP 403,
+`Server: HosterGuard`, and «Доступ к странице был заблокирован». The response
+reported public IP `193.47.42.213` and transaction
+`01a1d01b-aff4-7177-8067-62b156ae7846`. Earlier requests to the homepage,
+search and robots endpoints also returned 403. The same tender opened in the
+user's anonymous Edge session, while ordinary local curl through different
+egress also received 403. These observations establish a request-dependent
+upstream block; they establish neither an IP-only rule nor a sitewide outage.
+The exact WAF rule remains unknown.
+
+For a fresh incident, retain the request time and URL, HTTP status, response
+server/body and transaction identifier. Do not repeatedly retry HTTP 403;
+it is not a transient retry status in the collector. Ask the published
+IceTrade support contact `oit@icetrade.by` to review the blocking rule and
+confirm permitted API/export access and request-rate limits. A successful
+browser visit alone does not prove that collector access has recovered.
+
+Keep failures isolated by source and monitor fresh successful collection for
+each source independently. GIAS is an available fallback, with no guarantee
+that it covers every IceTrade procurement. Exact original/mirror references
+are described in the [integration API contract](integration-api.md#get-apiv1opportunities).

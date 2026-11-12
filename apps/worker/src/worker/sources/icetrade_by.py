@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 from worker.sources.base import extract_external_id, normalize_html_text
+from worker.sources.canonical import normalize_procurement_url
 from worker.sources.region_codes import ICETRADE_REGION_MAP, map_regions
 
 BASE_URL = "https://icetrade.by"
@@ -129,6 +130,11 @@ def build_search_params(search: IcetradeSearch | None) -> list[tuple[str, str]]:
         ("t[singleSource]", "1"),
         ("t[Auction]", "1"),
         ("t[Other]", "1"),
+        ("t[Limited]", "1"),
+        ("t[twoStageFirst]", "1"),
+        ("t[twoStageSecond]", "1"),
+        ("t[Marketing]", "1"),
+        ("t[MarketingForPrice]", "1"),
         ("t[contractingTrades]", "1"),
         ("t[socialOrder]", "1"),
         ("t[negotiations]", "1"),
@@ -383,6 +389,14 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
     delivery_terms = ""
     payment_terms = ""
     lots = []
+    # Only an explicitly labelled current-procurement reference identifies a
+    # mirror. Navigation, attachments and related/parent procedures do not.
+    reference_labels = {
+        "ссылка на закупку", "ссылка на оригинал закупки",
+        "ссылка на закупку на электронной торговой площадке",
+        "адрес сайта, обеспечивающего доступ на этп",
+    }
+    references: list[str | None] = []
     
     # 1. Parse DetailView tables for contacts and terms
     for row in soup.find_all("tr"):
@@ -393,6 +407,14 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
         td = row.find_all(["td", "th"])
         if len(td) < 2:
             continue
+        if normalize_html_text(th_text).rstrip(":") in reference_labels:
+            links = td[1].find_all("a", href=True)
+            current_urls = [url for link in links if (url := normalize_procurement_url(link["href"]))]
+            # A source homepage and document URLs can share the same cell with
+            # the actual invitation. They carry no procedure identity.
+            references.extend(current_urls)
+            if not current_urls:
+                references.append(None)
         td_val = normalize_html_text(td[1].get_text(" ", strip=True))
         if not td_val:
             continue
@@ -498,12 +520,20 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
                 break
                 
     from typing import Any
-    return {
+    details = {
         "contacts": contacts,
         "delivery_terms": delivery_terms,
         "payment_terms": payment_terms,
         "lots": lots
     }
+    if references:
+        unique = set(references)
+        details["canonical_url"] = references[0] if len(unique) == 1 else None
+        valid = sorted(value for value in unique if value is not None)
+        if len(valid) > 1:
+            details["canonical_reference_conflict"] = valid[:2]
+            logger.warning("Conflicting IceTrade procurement references: {}", valid[:2])
+    return details
 
 
 def fetch_tender_details(
