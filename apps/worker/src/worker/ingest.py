@@ -19,6 +19,7 @@ from belzakupki_db.enums import MatchStatus
 from worker.scoring import score_text
 from worker.resource_limits import positive_int_env
 from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP
+from worker.sources.canonical import preserve_canonical_reference
 from worker.sources.goszakupki_by import (
     BASE_URL,
     fetch_hvac_vitebsk_tenders,
@@ -171,6 +172,7 @@ def upsert_tender(
     ).scalar_one_or_none()
 
     if tender is None:
+        stored_item = preserve_canonical_reference(source.code, item)
         tender = Tender(
             source_id=source.id,
             external_id=external_id,
@@ -178,7 +180,7 @@ def upsert_tender(
             customer_name=item.get("customer_name"),
             url=item["url"],
             status=item.get("status", "posted"),
-            raw_data=make_json_serializable(item),
+            raw_data=make_json_serializable(stored_item),
             content_hash=item_hash,
             deadline_at=deadline_dt,
             published_at=published_dt,
@@ -192,7 +194,9 @@ def upsert_tender(
     tender.customer_name = item.get("customer_name")
     tender.url = item["url"]
     tender.status = item.get("status", tender.status)
-    tender.raw_data = make_json_serializable(item)
+    tender.raw_data = make_json_serializable(
+        preserve_canonical_reference(source.code, item, tender.raw_data)
+    )
     tender.content_hash = item_hash
     tender.deadline_at = deadline_dt
     tender.published_at = published_dt
@@ -332,7 +336,7 @@ def enrich_tender_if_needed(
             
             raw_data = dict(tender.raw_data or {})
             raw_data.update(details)
-            tender.raw_data = raw_data
+            tender.raw_data = preserve_canonical_reference(source_code, raw_data, tender.raw_data)
             session.add(tender)
             session.flush()
         except Exception as e:

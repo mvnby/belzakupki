@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, joinedload
 from apps.api.auth import signing_secret
 from belzakupki_db.models import SearchProfile, Tender, TenderDocument, TenderMatch, Tenant
 from belzakupki_db.session import get_session
+from worker.sources.canonical import tender_canonical_url
 
 router = APIRouter(prefix="/api/v1", tags=["Integration API v1"])
 security = HTTPBearer(auto_error=False)
@@ -35,6 +36,7 @@ class TenderSummary(BaseModel):
     title: str
     customer_name: str | None
     url: str
+    canonical_url: str | None = None
     deadline_at: datetime | None
     published_at: datetime | None
     estimated_value: str | float | None
@@ -434,7 +436,8 @@ def opportunities(
 
     This is a current-state feed, not an append-only event log. Repeated scans
     deliberately include unchanged rows and capture updates to older tenders.
-    Consumers must deduplicate by tenant + tender.source + tender.external_id.
+    Consumers retain native identity and may additionally deduplicate validated
+    canonical references within their destination tenant.
     """
     after_id = cursor_after(cursor, tenant_id)
     allowed_profiles = os.getenv("INTEGRATION_PROFILE_IDS", "").strip()
@@ -475,6 +478,7 @@ def opportunities(
             tender=TenderSummary(
                 id=tender.id, source=tender.source.code, external_id=tender.external_id or "",
                 title=tender.title, customer_name=tender.customer_name, url=tender.url,
+                canonical_url=tender_canonical_url(tender.source.code, tender.url, raw),
                 deadline_at=utc(tender.deadline_at) if tender.deadline_at else None,
                 published_at=utc(tender.published_at) if tender.published_at else None,
                 estimated_value=raw.get("estimated_value"), contacts=raw.get("contacts"),

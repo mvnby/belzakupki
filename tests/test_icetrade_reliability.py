@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import MagicMock, patch
 import httpx
 import pytest
@@ -13,7 +14,22 @@ from worker.sources.icetrade_by import (
     _create_client,
     _execute_request,
     is_retryable_exception,
+    build_search_url,
+    IcetradeSearch,
 )
+
+
+@pytest.mark.parametrize("search", [None, IcetradeSearch(text="кондиционер", regions=("2",))])
+def test_search_includes_current_procurement_types_without_losing_profile_filters(search):
+    params = parse_qs(urlsplit(build_search_url(search)).query)
+    # These current types are explicitly offered by IceTrade's Republic of
+    # Belarus search navigation; omitting one filters those procurements out.
+    for kind in ("Limited", "twoStageFirst", "twoStageSecond", "Marketing", "MarketingForPrice"):
+        assert params[f"t[{kind}]"] == ["1"]
+    assert params["t[Trade]"] == ["1"] and params["t[singleSource]"] == ["1"]
+    if search:
+        assert params["search_text"] == ["кондиционер"]
+        assert params["r[2]"] == ["2"]
 
 def test_user_agent_rotation():
     # Verify we get a user agent from the pool and it rotates/randomizes

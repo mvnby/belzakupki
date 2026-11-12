@@ -40,7 +40,8 @@ Response:
     "tender": {
       "id": 100, "source": "goszakupki_by", "external_id": "12345",
       "title": "Поставка кондиционеров", "customer_name": "Заказчик",
-      "url": "https://goszakupki.by/",
+      "url": "https://goszakupki.by/request/view/12345",
+      "canonical_url": "https://goszakupki.by/request/view/12345",
       "deadline_at": "2026-10-01T12:00:00Z",
       "published_at": "2026-09-19T09:00:00Z",
       "estimated_value": "15000 BYN", "contacts": null
@@ -77,6 +78,46 @@ Repeated pages are safe to replay. Current-state scans do not publish deletion
 tombstones; a disappeared record must never cause automatic deletion of a CRM
 lead. The feed is intended for modest per-tenant match volumes; an indexed durable
 change log can replace full reconciliation if measured scale requires it.
+
+`tender.canonical_url` is optional and nullable. It identifies the exact current
+procurement when an authoritative reference is available, allowing a consumer
+to group mirrors within the destination tenant. Consumers must independently
+validate and normalize it. Native `source`, `external_id` and `url` stay intact
+for scoped details and documents; a canonical reference never grants access.
+No title, customer, amount or document similarity establishes identity.
+
+Supported canonical URLs use HTTPS without a `www` alias: Goszakupki
+`/{marketing,etrade,request,single-source,single-source-reference,limited}/view/<positive-id>`,
+IceTrade `/tenders/all/view/<positive-id>`, and BUTB
+`https://zakupki.butb.by/auctions/viewinvitation.html?auction=<identifier>`.
+The Goszakupki procedure kind and ID are both identity; BUTB's `auction` query
+parameter is identity and must not be removed. Scheme/default-port, host alias,
+irrelevant query and fragment differences do not create a second procurement.
+Unknown routes, credentials, nondefault ports and lookalike hosts fail closed.
+Control characters including DEL are rejected before trimming outer whitespace;
+remaining whitespace or backslashes are rejected. Goszakupki and IceTrade accept
+one optional trailing path slash; BUTB requires the exact HTML path.
+
+For existing GIAS records, the reference is derived at export from the provider's
+top-level `raw_data.auctionUrl`; no backfill is needed. Nested
+`oneSourcePurchase.auctionUrl` refers to another procedure and is ignored, as are
+`links[*].link` documents. IceTrade extraction accepts only explicitly labelled
+current-procurement links in detail tables, including the user-provided real
+example `1407896`: the row «Адрес сайта, обеспечивающего доступ на ЭТП» links
+to `https://goszakupki.by/limited/view/3836760`. A platform homepage can coexist
+in that cell, and document links can appear nearby; neither carries identity.
+The regression fixture reproduces that reported structure. Collector-host live
+access remains blocked by the upstream 403.
+Search requests include the site's current Limited, two-stage and marketing
+procedure types alongside the previously enabled types, retaining profile text
+and region filters.
+Missing listing references or transient detail failures preserve a verified
+reference. Two different explicit valid references suppress canonical export,
+retain both evidence URLs, and require operator review rather than silently
+switching identity. An intervening invalid reference suppresses export while
+retaining the prior verified URL for subsequent conflict detection. Release
+consumers that accept this field before the collector:
+older strict consumers reject unknown fields.
 
 401 means invalid credentials, 403 means disabled/missing tenant, 400 means
 invalid cursor, 422 invalid page parameters, 503 unavailable configuration.
