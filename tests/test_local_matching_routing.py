@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.dialects.postgresql import JSONB
@@ -16,7 +16,7 @@ from belzakupki_db.models import TenderSource, Tender, SearchProfile, TenderMatc
 from belzakupki_db.enums import MatchStatus
 from worker.routing import run_local_profile_routing
 from worker.ingest import extract_tender_region, score_tender
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 @pytest.mark.parametrize("raw_data, expected", [
@@ -250,4 +250,96 @@ def test_local_profile_routing_with_regions(mock_enrich, db_session: Session):
     matches_brest = db_session.query(TenderMatch).filter(TenderMatch.tender_id == tender_brest.id).all()
     assert len(matches_brest) == 1
     assert matches_brest[0].profile_id == profile_all.id
+
+
+def _seed_routing_backlog(session, count):
+    source = TenderSource(code="goszakupki_by", name="Goszakupki", base_url="https://example.com")
+    session.add(source)
+    session.flush()
+    historical = Tender(source_id=source.id, external_id="checked", title="Already checked",
+                        url="https://example.com/checked", is_matched_checked=True)
+    session.add(historical)
+    pending = [Tender(source_id=source.id, external_id=f"pending-{index}", title="Pending",
+                      url=f"https://example.com/{index}", is_matched_checked=False)
+               for index in range(count)]
+    session.add_all(pending)
+    session.flush()
+    pending_ids = [tender.id for tender in pending]
+    source_id = source.id
+    session.commit()
+    return source_id, pending_ids
+
+
+def test_routing_drain_processes_all_unchecked_batches_with_zero_matches(db_session, monkeypatch):
+    from worker import routing, tasks
+
+    _, pending_ids = _seed_routing_backlog(db_session, 205)
+    scored_ids = []
+    monkeypatch.setattr(routing, "score_tender", lambda session, tender: scored_ids.append(tender.id) or 0)
+
+    assert tasks._drain_local_profile_routing(db_session) == 0
+    assert scored_ids == pending_ids
+    assert list(db_session.scalars(select(Tender.id).where(Tender.is_matched_checked.is_(False)))) == []
+
+
+def test_routing_drain_leaves_new_arrivals_for_next_snapshot(db_session, monkeypatch):
+    from worker import routing, tasks
+
+    source_id, pending_ids = _seed_routing_backlog(db_session, 5)
+    monkeypatch.setattr(routing, "ROUTING_BATCH_SIZE", 2)
+    scored_ids = []
+
+    def score(session, tender):
+        scored_ids.append(tender.id)
+        if len(scored_ids) == 1:
+            session.add(Tender(source_id=source_id, external_id="new-arrival", title="New arrival",
+                               url="https://example.com/new", is_matched_checked=False))
+        return 0
+
+    monkeypatch.setattr(routing, "score_tender", score)
+    tasks._drain_local_profile_routing(db_session)
+
+    assert scored_ids == pending_ids
+    assert list(db_session.scalars(select(Tender.external_id).where(
+        Tender.is_matched_checked.is_(False)))) == ["new-arrival"]
+    tasks._drain_local_profile_routing(db_session)
+    assert len(scored_ids) == len(pending_ids) + 1
+
+
+def test_routing_drain_keeps_committed_batches_and_retries_unchecked_rows(db_session, monkeypatch):
+    from functools import partial
+    from worker import routing, tasks
+
+    _, pending_ids = _seed_routing_backlog(db_session, 5)
+    monkeypatch.setattr(routing, "ROUTING_BATCH_SIZE", 2)
+
+    def fail_second_batch(session, tender):
+        if tender.id == pending_ids[2]:
+            raise RuntimeError("routing scoring failed")
+        return 0
+
+    monkeypatch.setattr(routing, "score_tender", fail_second_batch)
+    failures = []
+    tasks._run_stage(db_session, failures, "routing", partial(tasks._drain_local_profile_routing, db_session))
+    assert len(failures) == 1 and "routing scoring failed" in failures[0]
+    assert list(db_session.scalars(select(Tender.id).where(
+        Tender.is_matched_checked.is_(False)).order_by(Tender.id))) == pending_ids[2:]
+
+    scored_ids = []
+    monkeypatch.setattr(routing, "score_tender", lambda session, tender: scored_ids.append(tender.id) or 0)
+    tasks._drain_local_profile_routing(db_session)
+    assert scored_ids == pending_ids[2:]
+    assert list(db_session.scalars(select(Tender.id).where(Tender.is_matched_checked.is_(False)))) == []
+
+
+def test_routing_drain_stops_if_batch_does_not_advance(db_session, monkeypatch):
+    from worker import tasks
+
+    _seed_routing_backlog(db_session, 2)
+    stuck_batch = Mock(return_value=0)
+    monkeypatch.setattr(tasks, "run_local_profile_routing", stuck_batch)
+
+    with pytest.raises(RuntimeError, match="did not advance"):
+        tasks._drain_local_profile_routing(db_session)
+    stuck_batch.assert_called_once()
 

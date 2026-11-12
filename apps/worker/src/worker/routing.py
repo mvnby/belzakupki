@@ -1,5 +1,5 @@
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from belzakupki_db.models import Tender
 from worker.ingest import score_tender, enrich_tender_if_needed
@@ -8,12 +8,24 @@ from worker.resource_limits import positive_int_env
 
 ROUTING_BATCH_SIZE = positive_int_env("WORKER_ROUTING_BATCH_SIZE", 100)
 
-def run_local_profile_routing(session: Session) -> int:
+
+def get_pending_routing_max_id(session: Session) -> int | None:
+    return session.scalar(select(func.max(Tender.id)).where(Tender.is_matched_checked.is_(False)))
+
+
+def get_pending_routing_min_id(session: Session, *, through_id: int) -> int | None:
+    return session.scalar(select(func.min(Tender.id)).where(
+        Tender.is_matched_checked.is_(False), Tender.id <= through_id,
+    ))
+
+
+def run_local_profile_routing(session: Session, *, through_id: int | None = None) -> int:
     """
     Проверяет все новые/необработанные тендеры по активным поисковым профилям.
     При совпадении создает TenderMatch.
     В конце помечает тендеры как проверенные (is_matched_checked = True).
     Обогащение деталями (lots, contacts, etc.) выполняется в отдельных транзакциях.
+    through_id ограничивает обработку фиксированным снимком очереди.
     """
     stmt = (
         select(Tender)
@@ -21,6 +33,8 @@ def run_local_profile_routing(session: Session) -> int:
         .order_by(Tender.id.asc())
         .limit(ROUTING_BATCH_SIZE)
     )
+    if through_id is not None:
+        stmt = stmt.where(Tender.id <= through_id)
     unchecked_tenders = list(session.execute(stmt).scalars())
     
     if not unchecked_tenders:
