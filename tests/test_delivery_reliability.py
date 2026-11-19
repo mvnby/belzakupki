@@ -124,7 +124,7 @@ def test_analysis_charges_one_completed_match(database, monkeypatch, stage_one, 
     from worker.analyzer import deepseek_client
     first = Mock(side_effect=stage_one) if isinstance(stage_one, Exception) else Mock(return_value=stage_one)
     second = Mock(side_effect=stage_two) if isinstance(stage_two, Exception) else Mock(return_value=stage_two)
-    monkeypatch.setattr(deepseek_client, "is_ai_provider_configured", lambda: True)
+    monkeypatch.setattr(deepseek_client, "is_ai_provider_configured", lambda _tenant_id: True)
     monkeypatch.setattr(deepseek_client, "analyze_relevance_by_metadata", first)
     monkeypatch.setattr(deepseek_client, "analyze_tender_relevance", second)
     with Session(database) as session:
@@ -133,15 +133,17 @@ def test_analysis_charges_one_completed_match(database, monkeypatch, stage_one, 
         session.commit()
         assert tenant.ai_credits_used == 2 + spent
         assert matches[0].ai_relevance is relevance
+    assert first.call_args.kwargs["tenant_id"] == tenant.id
     assert first.call_args.kwargs["niche_description"] == PRESETS["office_supplies"]["description"]
     if second.called:
+        assert second.call_args.kwargs["tenant_id"] == tenant.id
         assert second.call_args.kwargs["niche_description"] == first.call_args.kwargs["niche_description"]
 
 
 def test_only_remaining_credit_can_start_analysis(database, monkeypatch):
     from worker.analyzer import deepseek_client
     analyze = Mock(return_value={"relevant": False})
-    monkeypatch.setattr(deepseek_client, "is_ai_provider_configured", lambda: True)
+    monkeypatch.setattr(deepseek_client, "is_ai_provider_configured", lambda _tenant_id: True)
     monkeypatch.setattr(deepseek_client, "analyze_relevance_by_metadata", analyze)
     with Session(database) as session:
         tenant, matches = seed(session, credits=29, count=2)
@@ -229,7 +231,7 @@ def test_concurrent_analysis_does_not_charge_same_match_twice(postgres_schema, m
         assert release.wait(timeout=10)
         return {"relevant": False}
     analyze = Mock(side_effect=hold)
-    monkeypatch.setattr(deepseek_client, "is_ai_provider_configured", lambda: True)
+    monkeypatch.setattr(deepseek_client, "is_ai_provider_configured", lambda _tenant_id: True)
     monkeypatch.setattr(deepseek_client, "analyze_relevance_by_metadata", analyze)
     def run():
         with Session(postgres_schema) as session:

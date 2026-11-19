@@ -67,6 +67,8 @@ def analyze_relevance_by_metadata(
     negative_keywords: list[str],
     description: str | None = None,
     api_key: str | None = None,
+    *,
+    tenant_id: int | None = None,
 ) -> dict[str, Any] | None:
     desc_text = f"\nDescription: {description}" if description else ""
     return analyze_json(
@@ -76,6 +78,7 @@ def analyze_relevance_by_metadata(
         ],
         timeout=60,
         api_key=api_key,
+        tenant_id=tenant_id,
     )
 
 
@@ -87,6 +90,8 @@ def analyze_tender_relevance(
     keywords: list[str],
     negative_keywords: list[str],
     api_key: str | None = None,
+    *,
+    tenant_id: int | None = None,
 ) -> dict[str, Any] | None:
     max_chars = 30_000
     if len(documents_text) > max_chars:
@@ -98,4 +103,5 @@ def analyze_tender_relevance(
         ],
         timeout=60,
         api_key=api_key,
+        tenant_id=tenant_id,
     )

@@ -1,4 +1,4 @@
-"""Bounded OpenAI-compatible provider fallback for worker AI analysis."""
+"""Bounded provider requests for worker AI analysis."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,6 +15,7 @@ from loguru import logger
 MAX_STAGE_SECONDS = 60
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_OUTPUT_TOKENS = 1_024
+OPENAI_MAX_OUTPUT_TOKENS = 2_048
 DEFAULT_PROVIDER_ORDER = ("deepseek", "qwen", "zai")
 
 
@@ -28,7 +29,8 @@ class ProviderConfig:
 
     @property
     def endpoint(self) -> str:
-        return f"{self.base_url.rstrip('/')}/chat/completions"
+        route = "responses" if self.name == "openai" else "chat/completions"
+        return f"{self.base_url.rstrip('/')}/{route}"
 
 
 class ProviderFailure(Exception):
@@ -108,12 +110,12 @@ def _system_provider(name: str) -> ProviderConfig | None:
     return None
 
 
-def configured_providers(api_key: str | None = None) -> tuple[ProviderConfig, ...]:
-    """Return enabled providers, or only the caller's explicit DeepSeek key.
-
-    An explicit key is tenant-owned. It must never authorize a fallback to
-    shared system credentials.
-    """
+def configured_providers(
+    api_key: str | None = None,
+    *,
+    tenant_id: int | None = None,
+) -> tuple[ProviderConfig, ...]:
+    """Select a tenant's dedicated provider or the shared provider order."""
     if api_key is not None:
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         if not _configured(api_key) or not _valid_base_url(base_url):
@@ -128,6 +130,21 @@ def configured_providers(api_key: str | None = None) -> tuple[ProviderConfig, ..
             ),
         )
 
+    mvn_tenant_id = os.getenv("MVN_OPENAI_TENANT_ID", "").strip()
+    if type(tenant_id) is int and tenant_id > 0 and str(tenant_id) == mvn_tenant_id:
+        token = os.getenv("MVN_OPENAI_API_KEY", "").strip()
+        if not _configured(token):
+            return ()
+        return (
+            ProviderConfig(
+                name="openai",
+                api_key=token,
+                base_url="https://api.openai.com/v1",
+                model=os.getenv("MVN_OPENAI_MODEL", "gpt-6.2-sol"),
+                extra_payload={},
+            ),
+        )
+
     providers: list[ProviderConfig] = []
     for name in _provider_order():
         provider = _system_provider(name)
@@ -136,8 +153,8 @@ def configured_providers(api_key: str | None = None) -> tuple[ProviderConfig, ..
     return tuple(providers)
 
 
-def is_ai_provider_configured() -> bool:
-    return bool(configured_providers())
+def is_ai_provider_configured(tenant_id: int | None = None) -> bool:
+    return bool(configured_providers(tenant_id=tenant_id))
 
 
 def _read_response(response: httpx.Response, deadline: float) -> bytes:
@@ -150,6 +167,22 @@ def _read_response(response: httpx.Response, deadline: float) -> bytes:
         if len(payload) > MAX_RESPONSE_BYTES:
             raise ProviderFailure("ResponseTooLarge")
     return bytes(payload)
+
+
+def _response_text(provider: ProviderConfig, result: dict[str, Any]) -> str:
+    if provider.name != "openai":
+        return result["choices"][0]["message"]["content"]
+
+    if result.get("status") != "completed":
+        raise ProviderFailure("OpenAIResponseNotCompleted")
+    text_parts = [
+        part["text"]
+        for item in result["output"]
+        if item["type"] == "message" and item.get("role") == "assistant"
+        for part in item["content"]
+        if part["type"] == "output_text"
+    ]
+    return "".join(text_parts)
 
 
 def _post_json(
@@ -179,8 +212,9 @@ def _post_json(
 
     try:
         result = json.loads(raw)
-        content = result["choices"][0]["message"]["content"]
-        analysis = json.loads(content)
+        if not isinstance(result, dict):
+            raise ProviderFailure("InvalidProviderResponse")
+        analysis = json.loads(_response_text(provider, result))
     except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, IndexError) as exc:
         raise ProviderFailure(type(exc).__name__) from exc
     if not isinstance(analysis, dict) or type(analysis.get("relevant")) is not bool:
@@ -193,9 +227,10 @@ def analyze_json(
     *,
     timeout: int,
     api_key: str | None = None,
+    tenant_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Return the first valid analysis within a stage budget checked per chunk."""
-    providers = configured_providers(api_key)
+    providers = configured_providers(api_key, tenant_id=tenant_id)
     deadline = time.monotonic() + min(max(timeout, 1), MAX_STAGE_SECONDS)
     for index, provider in enumerate(providers):
         remaining = deadline - time.monotonic()
@@ -203,14 +238,24 @@ def analyze_json(
             logger.warning("AI provider stage deadline exhausted")
             break
         attempt_timeout = remaining / (len(providers) - index)
-        payload: dict[str, Any] = {
-            "model": provider.model,
-            "messages": messages,
-            "temperature": 0.0,
-            "max_tokens": MAX_OUTPUT_TOKENS,
-            "response_format": {"type": "json_object"},
-            **provider.extra_payload,
-        }
+        if provider.name == "openai":
+            payload = {
+                "model": provider.model,
+                "input": messages,
+                "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
+                "reasoning": {"effort": "low"},
+                "text": {"format": {"type": "json_object"}},
+                "store": False,
+            }
+        else:
+            payload = {
+                "model": provider.model,
+                "messages": messages,
+                "temperature": 0.0,
+                "max_tokens": MAX_OUTPUT_TOKENS,
+                "response_format": {"type": "json_object"},
+                **provider.extra_payload,
+            }
         try:
             analysis = _post_json(provider, payload, attempt_timeout, deadline)
         except ProviderFailure as exc:

@@ -626,7 +626,7 @@ def run_ai_analysis_for_new_matches(
     after_id: int = 0,
     through_id: int | None = None,
 ) -> AIAnalysisBatch:
-    """Запускает двухэтапную ИИ-проверку релевантности тендеров через DeepSeek API.
+    """Запускает двухэтапную ИИ-проверку релевантности тендеров через настроенного ИИ-провайдера.
 
     Этап 1: Экспресс-анализ метаданных (название, описание, заказчик). Если не подходит -> отклонение.
     Этап 2: Скачивание вложений (.pdf, .docx, .xlsx), извлечение текста и глубокий анализ требований/бюджета.
@@ -655,31 +655,31 @@ def run_ai_analysis_for_new_matches(
     last_selected_id = matches[-1].id
 
     from worker.analyzer.deepseek_client import is_ai_provider_configured
-    if not is_ai_provider_configured():
-        logger.warning(
-            "AI provider is not configured; explicitly approving {} "
-            "morphology-matched rows in this bounded batch",
-            len(matches),
-        )
-        for match in matches:
-            match.ai_relevance = True
-            match.ai_analysis = {
-                "relevant": True,
-                "bypassed": True,
-                "reason": "ai_not_configured",
-                "explanation": (
-                    "ИИ-анализ отключён: использован результат "
-                    "морфологического скоринга"
-                ),
-            }
-            session.add(match)
+
+    analysis_matches = []
+    for match in matches:
+        if is_ai_provider_configured(match.profile.tenant_id):
+            analysis_matches.append(match)
+            continue
+        match.ai_relevance = True
+        match.ai_analysis = {
+            "relevant": True,
+            "bypassed": True,
+            "reason": "ai_not_configured",
+            "explanation": (
+                "ИИ-анализ отключён: использован результат морфологического скоринга"
+            ),
+        }
+        session.add(match)
+    if len(analysis_matches) < len(matches):
         session.flush()
+    if not analysis_matches:
         return AIAnalysisBatch(
             selected_count=len(matches),
             last_selected_id=last_selected_id,
         )
 
-    logger.info(f"Running AI analysis for {len(matches)} new matches from source '{source_code}'...")
+    logger.info(f"Running AI analysis for {len(analysis_matches)} new matches from source '{source_code}'...")
 
     _custom_temp_dir = os.getenv("WORKER_TEMP_DIR")
     temp_dir = _custom_temp_dir or tempfile.mkdtemp(prefix="belzakupki_docs_")
@@ -709,7 +709,7 @@ def run_ai_analysis_for_new_matches(
 
     from belzakupki_db.billing import reserve_ai_credit
 
-    for match in matches:
+    for match in analysis_matches:
         tender = match.tender
         logger.info(f"AI Analyzing match {match.id} (Tender: {tender.title})")
 
@@ -742,10 +742,11 @@ def run_ai_analysis_for_new_matches(
                     keywords=keywords,
                     negative_keywords=negative_keywords,
                     description=tender.description,
+                    tenant_id=tenant_id,
                 )
 
                 if metadata_analysis is None:
-                    logger.warning(f"DeepSeek metadata analysis returned None for match {match.id}. Skipping for now.")
+                    logger.warning(f"AI metadata analysis returned None for match {match.id}. Skipping for now.")
                     continue
 
                 is_relevant = metadata_analysis.get("relevant", False)
@@ -878,6 +879,7 @@ def run_ai_analysis_for_new_matches(
 
                 # Analyze
                 analysis = analyze_tender_relevance(
+                    tenant_id=tenant_id,
                     title=tender.title,
                     customer=tender.customer_name or "Не указан",
                     documents_text=text_content or tender.title,

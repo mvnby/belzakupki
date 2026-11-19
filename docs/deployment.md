@@ -48,6 +48,20 @@ when routing is intentionally provisioned or changed. This script neither starts
 nor recreates Caddy and never changes its routes. It performs no system-wide
 Docker cleanup and does not delete other projects' containers or images.
 
+## Dedicated OpenAI provider for MVN
+
+To opt in, set `MVN_OPENAI_TENANT_ID` to the verified active MVN tenant ID
+and provision `MVN_OPENAI_API_KEY` in the protected worker environment. Set
+`MVN_OPENAI_MODEL` to override the default `gpt-6.2-sol`. Both analysis stages
+send the existing text inputs to the OpenAI Responses API. Other tenant IDs
+use the configured shared provider order. Dedicated provider failures leave
+matches pending for retry. Belzakupki's local AI quota still applies.
+
+Confirm the worker runs in a location supported by OpenAI before provisioning
+the key. Deploy the reviewed release, then verify an analyzed MVN match records
+`provider=openai` and a match from a different tenant uses a shared provider.
+To disable the dedicated route, clear the tenant ID and the key and redeploy.
+
 # Attachment extraction limits
 
 ZIP and RAR entries are validated before extraction, including paths, links,
