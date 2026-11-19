@@ -75,6 +75,9 @@ def clear_provider_environment(monkeypatch):
         "ZAI_API_KEY",
         "ZAI_BASE_URL",
         "ZAI_MODEL",
+        "MVN_OPENAI_TENANT_ID",
+        "MVN_OPENAI_API_KEY",
+        "MVN_OPENAI_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -220,3 +223,61 @@ def test_stage_deadline_is_checked_while_streaming_response(monkeypatch):
 
     assert ai_providers.analyze_json([{"role": "user", "content": "test"}], timeout=60) is None
     assert len(calls) == 1
+
+
+def test_mvn_openai_isolated_from_partner_provider(monkeypatch):
+    configure_deepseek_and_qwen(monkeypatch)
+    monkeypatch.setenv("MVN_OPENAI_TENANT_ID", "7")
+    monkeypatch.setenv("MVN_OPENAI_API_KEY", "test-mvn-openai-key")
+    openai_body = {
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "summary": []},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": '{"relevant": true}'}],
+            },
+        ],
+    }
+    calls = use_client(
+        monkeypatch,
+        [FakeResponse(json.dumps(openai_body).encode()), response_for({"relevant": False})],
+    )
+    messages = [{"role": "user", "content": "Return a JSON verdict"}]
+
+    assert ai_providers.analyze_json(messages, timeout=30, tenant_id=7) == {
+        "relevant": True,
+        "provider": "openai",
+        "model": "gpt-6.2-sol",
+    }
+    assert ai_providers.analyze_json(messages, timeout=30, tenant_id=8)["provider"] == "deepseek"
+    assert [call["url"] for call in calls] == [
+        "https://api.openai.com/v1/responses",
+        "https://api.deepseek.com/chat/completions",
+    ]
+    assert calls[0]["headers"]["Authorization"] == "Bearer test-mvn-openai-key"
+    assert calls[1]["headers"]["Authorization"] == "Bearer deepseek-key"
+    assert calls[0]["payload"]["input"] == messages
+    assert calls[0]["payload"]["text"]["format"] == {"type": "json_object"}
+    assert calls[0]["payload"]["store"] is False
+    assert all(provider.name != "openai" for provider in ai_providers.configured_providers())
+
+
+@pytest.mark.parametrize("body,status", [
+    ({"status": "incomplete", "output": []}, 200),
+    ({}, 429),
+])
+def test_mvn_openai_failure_leaves_match_pending(monkeypatch, body, status):
+    configure_deepseek_and_qwen(monkeypatch)
+    monkeypatch.setenv("MVN_OPENAI_TENANT_ID", "7")
+    monkeypatch.setenv("MVN_OPENAI_API_KEY", "test-mvn-openai-key")
+    calls = use_client(monkeypatch, [FakeResponse(json.dumps(body).encode(), status)])
+
+    assert ai_providers.analyze_json(
+        [{"role": "user", "content": "Return a JSON verdict"}],
+        timeout=30,
+        tenant_id=7,
+    ) is None
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://api.openai.com/v1/responses"
