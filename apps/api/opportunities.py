@@ -4,7 +4,7 @@ import hmac
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 import jwt
@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from apps.api.auth import signing_secret
+from apps.api.goszakupki_document_inventory import MAX_DOCUMENT_NAME, MAX_DOCUMENT_URL, MAX_DOCUMENTS, refresh_inventory
 from belzakupki_db.models import SearchProfile, Tender, TenderDocument, TenderMatch, Tenant
 from belzakupki_db.session import get_session
 from worker.sources.canonical import tender_canonical_url
@@ -102,6 +103,7 @@ class TenderDetail(BaseModel):
     lots: list[dict[str, Any]]
     objects: list[dict[str, Any]]
     documents: list[TenderDocumentLink]
+    document_inventory_complete: bool
 
 
 def integration_tenant(
@@ -258,31 +260,61 @@ def _document_id(name: str, source_url: str) -> str:
     return hashlib.sha256(f"{name}\0{source_url}".encode()).hexdigest()
 
 
-def _document_links(tender: Tender, session: Session) -> list[TenderDocumentLink]:
-    raw = tender.raw_data or {}
-    attachments = raw.get("attachments")
-    if not isinstance(attachments, list):
-        return []
-    extracted_by_name = {
-        document.file_name: document.content
-        for document in session.scalars(
-            select(TenderDocument).where(TenderDocument.tender_id == tender.id)
-        )
-    }
-    documents = []
+def _attachment_links(attachments, base_url: str) -> tuple[dict[str, tuple[str, str]], bool]:
+    links: dict[str, tuple[str, str]] = {}
+    complete = isinstance(attachments, (list, tuple)) and bool(attachments)
+    if not complete:
+        return links, False
     for attachment in attachments:
         if not isinstance(attachment, dict):
+            complete = False
             continue
-        source_url = _safe_source_url(attachment.get("url"), tender.source.base_url)
+        source_url = _safe_source_url(attachment.get("url"), base_url)
         name = _mapping_value(attachment, "name", "file_name", "filename")
-        if source_url and name:
-            extracted_text = extracted_by_name.get(name)
-            documents.append(TenderDocumentLink(
-                id=_document_id(name, source_url), name=name, source_url=source_url,
-                extracted_text=extracted_text[:EXTRACTED_DOCUMENT_TEXT_LIMIT] if extracted_text else None,
-                extracted_text_truncated=bool(extracted_text and len(extracted_text) > EXTRACTED_DOCUMENT_TEXT_LIMIT),
-            ))
-    return documents
+        if not source_url or not name:
+            complete = False
+            continue
+        key = _document_id(name, source_url)
+        if key in links:
+            continue
+        if len(name) > MAX_DOCUMENT_NAME or len(source_url) > MAX_DOCUMENT_URL:
+            complete = False
+            continue
+        if len(links) == MAX_DOCUMENTS:
+            complete = False
+            break
+        links[key] = (name, source_url)
+    return links, complete
+
+
+def _document_links(
+    tender: Tender, session: Session, *, include_text: bool = True,
+) -> tuple[list[TenderDocumentLink], bool]:
+    raw = tender.raw_data or {}
+    links, complete = _attachment_links(raw.get("attachments"), tender.source.base_url)
+    from_saved_inventory = bool(links)
+    if not links and tender.source.code == "goszakupki_by":
+        canonical = tender_canonical_url(tender.source.code, tender.url, raw)
+        if canonical and canonical.rsplit("/", 1)[-1] == str(tender.external_id):
+            live = refresh_inventory(canonical)
+            if live is not None:
+                links, complete = _attachment_links(live.attachments, tender.source.base_url)
+                complete = complete and live.complete
+    extracted_by_name = {}
+    if include_text and from_saved_inventory:
+        extracted_by_name = {
+            document.file_name: document.content
+            for document in session.scalars(select(TenderDocument).where(TenderDocument.tender_id == tender.id))
+        }
+    documents = []
+    for key, (name, source_url) in links.items():
+        extracted_text = extracted_by_name.get(name)
+        documents.append(TenderDocumentLink(
+            id=key, name=name, source_url=source_url,
+            extracted_text=extracted_text[:EXTRACTED_DOCUMENT_TEXT_LIMIT] if extracted_text else None,
+            extracted_text_truncated=bool(extracted_text and len(extracted_text) > EXTRACTED_DOCUMENT_TEXT_LIMIT),
+        ))
+    return documents, complete
 
 
 def _provider_download_settings(source_code: str) -> tuple[dict[str, str], bool, str | None]:
@@ -374,6 +406,7 @@ def tender_detail(
     """
     tender = _scoped_tender(source_code, external_id, tenant_id, session)
     raw = tender.raw_data or {}
+    documents, document_inventory_complete = _document_links(tender, session)
     return TenderDetail(
         source=tender.source.code,
         external_id=tender.external_id or "",
@@ -394,7 +427,8 @@ def tender_detail(
         objects=raw.get("objects") if isinstance(raw.get("objects"), list) else (
             raw.get("lots") if isinstance(raw.get("lots"), list) else []
         ),
-        documents=_document_links(tender, session),
+        documents=documents,
+        document_inventory_complete=document_inventory_complete,
     )
 
 
@@ -411,17 +445,16 @@ def tender_document(
 ) -> StreamingResponse:
     """Proxy one original attachment without exposing arbitrary outbound URLs."""
     tender = _scoped_tender(source_code, external_id, tenant_id, session)
-    document = next(
-        (item for item in _document_links(tender, session) if item.id == document_id),
-        None,
-    )
+    documents, _ = _document_links(tender, session, include_text=False)
+    document = next((item for item in documents if item.id == document_id), None)
     if document is None:
         raise HTTPException(404, "Tender document is unavailable in this integration scope")
     safe_name = document.name.replace('"', "'").replace("\n", " ").replace("\r", " ")
+    disposition = f'filename="{safe_name}"' if safe_name.isascii() else f"filename*=UTF-8''{quote(safe_name, safe='')}"
     return StreamingResponse(
         _download_document(tender.source.code, document.source_url, tender.source.base_url),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        headers={"Content-Disposition": f"attachment; {disposition}"},
     )
 
 

@@ -1,5 +1,8 @@
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -181,6 +184,78 @@ def test_tender_detail_and_document_download_are_tenant_scoped(integration, monk
     monkeypatch.delenv("INTEGRATION_PROFILE_IDS")
     monkeypatch.setenv("INTEGRATION_TENANT_ID", "2")
     assert client.get("/api/v1/tenders/test_source/0", headers=headers).status_code == 404
+
+
+def _goszakupki_tender(integration):
+    _, session, matches, _ = integration
+    tender = matches[0].tender
+    tender.source.code = "goszakupki_by"
+    tender.source.base_url = "https://goszakupki.by"
+    tender.external_id = "3783338"
+    tender.url = "https://goszakupki.by/request/view/3783338"
+    tender.raw_data = {"attachments": []}
+    session.commit()
+    return tender
+
+
+def test_recovers_archive_from_scoped_publication_without_reloading_saved_text(integration, monkeypatch):
+    from apps.api import goszakupki_document_inventory as inventory
+
+    client, session, _, headers = integration
+    tender = _goszakupki_tender(integration)
+    attachment = {"name": "Проект и смета.zip", "url": "https://goszakupki.by/get-file/estimate.zip?download=1"}
+    fetch = Mock(return_value=[attachment])
+    monkeypatch.setattr(inventory, "_cache", OrderedDict())
+    monkeypatch.setattr(inventory, "fetch_tender_attachments", fetch)
+    session.add(TenderDocument(tender_id=tender.id, file_name=attachment["name"], content="text from an earlier version"))
+    session.commit()
+    url = "/api/v1/tenders/goszakupki_by/3783338"
+
+    assert client.get(url).status_code == 401
+    fetch.assert_not_called()
+    card = client.get(url, headers=headers).json()
+    assert card["document_inventory_complete"]
+    (file,) = card["documents"]
+    assert file["name"] == attachment["name"] and file["extracted_text"] is None
+
+    download = Mock(return_value=iter([b"archive bytes"]))
+    monkeypatch.setattr("apps.api.opportunities._download_document", download)
+    response = client.get(f"{url}/documents/{file['id']}", headers=headers)
+    assert response.status_code == 200 and response.content == b"archive bytes"
+    assert response.headers["content-disposition"].startswith("attachment; filename*=UTF-8''")
+    fetch.assert_called_once_with(tender.url, timeout=3, max_page_bytes=2 * 1024 * 1024)
+    download.assert_called_once_with("goszakupki_by", attachment["url"], tender.source.base_url)
+    session.refresh(tender)
+    assert tender.raw_data["attachments"] == []
+
+    monkeypatch.setenv("INTEGRATION_TENANT_ID", "2")
+    assert client.get(f"{url}/documents/{file['id']}", headers=headers).status_code == 404
+    assert download.call_count == 1
+
+
+def test_inventory_failure_is_temporarily_cached_and_then_retried(integration, monkeypatch):
+    from apps.api import goszakupki_document_inventory as inventory
+
+    client, _, _, headers = integration
+    _goszakupki_tender(integration)
+    fetch = Mock(side_effect=[
+        httpx.ConnectError("upstream unavailable"),
+        [{"name": "ТЗ.pdf", "url": "https://goszakupki.by/get-file/specification.pdf"}],
+    ])
+    monkeypatch.setattr(inventory, "_cache", OrderedDict())
+    monkeypatch.setattr(inventory, "fetch_tender_attachments", fetch)
+    clock = Mock(return_value=1.0)
+    monkeypatch.setattr(inventory, "monotonic", clock)
+    url = "/api/v1/tenders/goszakupki_by/3783338"
+    for _ in range(2):
+        card = client.get(url, headers=headers).json()
+        assert not card["documents"] and not card["document_inventory_complete"]
+    assert fetch.call_count == 1
+
+    clock.return_value = 22.0
+    card = client.get(url, headers=headers).json()
+    assert card["document_inventory_complete"] and len(card["documents"]) == 1
+    assert fetch.call_count == 2
 
 
 def test_goszakupki_source_customer_fields_reach_scoped_api(integration):

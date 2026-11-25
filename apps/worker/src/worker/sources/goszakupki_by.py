@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 import os
 import re
+from time import monotonic
 from urllib.parse import urlencode, urljoin
 
 import httpx
@@ -328,36 +329,52 @@ def fetch_tender_attachments(
     tender_url: str,
     *,
     verify_ssl: bool | None = None,
+    timeout: float = 15,
+    max_page_bytes: int | None = None,
 ) -> list[dict[str, str]]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
     headers = build_headers()
-    
+    if max_page_bytes is not None:
+        headers["Accept-Encoding"] = "identity"
+    deadline = monotonic() + 2 * timeout
     with httpx.Client(
-        follow_redirects=True,
+        follow_redirects=max_page_bytes is None,
         headers=headers,
-        timeout=15,
+        timeout=timeout,
         verify=verify,
     ) as client:
-        # Warm up session
-        client.get(BASE_URL).raise_for_status()
-        response = client.get(tender_url)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, "html.parser")
-        attachments = []
-        
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if "/get-file/" in href:
-                file_url = urljoin(tender_url, href)
-                if "download=1" not in file_url:
-                    file_url += "&download=1" if "?" in file_url else "?download=1"
-                file_name = normalize_html_text(link.get_text("", strip=False)) or href.split("/")[-1]
-                attachments.append({
-                    "name": file_name,
-                    "url": file_url,
-                })
-        return attachments
+        if max_page_bytes is None:
+            client.get(BASE_URL).raise_for_status()
+            response = client.get(tender_url)
+            response.raise_for_status()
+            html = response.text
+        else:
+            with client.stream("GET", BASE_URL) as warmup:
+                warmup.raise_for_status()
+            with client.stream("GET", tender_url) as response:
+                response.raise_for_status()
+                if response.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise ValueError("Unexpected encoding of procurement page")
+                body = bytearray()
+                for chunk in response.iter_raw():
+                    if monotonic() > deadline:
+                        raise httpx.TimeoutException("Procurement page read timed out")
+                    if len(body) + len(chunk) > max_page_bytes:
+                        raise ValueError("Procurement page exceeds the attachment inventory size limit")
+                    body.extend(chunk)
+                html = body.decode(response.encoding or "utf-8", errors="replace")
+
+    soup = BeautifulSoup(html, "html.parser")
+    attachments = []
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if "/get-file/" in href:
+            file_url = urljoin(tender_url, href)
+            if "download=1" not in file_url:
+                file_url += "&download=1" if "?" in file_url else "?download=1"
+            file_name = normalize_html_text(link.get_text("", strip=False)) or href.split("/")[-1]
+            attachments.append({"name": file_name, "url": file_url})
+    return attachments
 
 
 def parse_tender_details_html(html: str) -> dict[str, Any]:
