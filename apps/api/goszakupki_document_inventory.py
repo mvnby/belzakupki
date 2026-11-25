@@ -1,4 +1,4 @@
-"""Bounded read-through cache for originals of already scoped Goszakupki tenders."""
+"""Bounded read-through cache for exact Goszakupki lot and attachment listings."""
 
 import logging
 from collections import OrderedDict
@@ -7,11 +7,15 @@ from dataclasses import dataclass
 from threading import Lock
 from time import monotonic
 
-from worker.sources.goszakupki_by import fetch_tender_attachments
+from bs4 import BeautifulSoup
+
+from worker.sources.goszakupki_by import attachments_from_page, fetch_tender_html
+from worker.sources.goszakupki_lots import native_lots
 
 MAX_DOCUMENTS = 100
 MAX_DOCUMENT_NAME = 500
 MAX_DOCUMENT_URL = 2048
+MAX_LOTS = 100
 _MAX_ENTRIES = 128
 _MAX_PARALLEL_READS = 2
 _PAGE_BYTES = 2 * 1024 * 1024
@@ -23,6 +27,8 @@ _FAILURE_RETRY_SECONDS = 20
 class PublicInventory:
     attachments: tuple[dict[str, str], ...]
     complete: bool
+    lots: tuple[dict[str, str], ...]
+    lots_complete: bool
 
 
 _cache: OrderedDict[str, tuple[float, PublicInventory | None]] = OrderedDict()
@@ -52,14 +58,21 @@ def refresh_inventory(canonical_url: str) -> PublicInventory | None:
 
     result = None
     try:
-        attachments = fetch_tender_attachments(canonical_url, timeout=_TIMEOUT_SECONDS, max_page_bytes=_PAGE_BYTES)
+        html = fetch_tender_html(canonical_url, timeout=_TIMEOUT_SECONDS, max_page_bytes=_PAGE_BYTES)
+        page = BeautifulSoup(html, "html.parser")
+        attachments = attachments_from_page(page, canonical_url)
         bounded = tuple(attachment for attachment in attachments[:MAX_DOCUMENTS]
                         if len(attachment["name"]) <= MAX_DOCUMENT_NAME and len(attachment["url"]) <= MAX_DOCUMENT_URL)
-        result = PublicInventory(bounded, complete=bool(bounded) and len(bounded) == len(attachments))
+        lots, lots_complete = native_lots(page) or ([], False)
+        bounded_lots = tuple({key: value[:1000] for key, value in lot.items()} for lot in lots[:MAX_LOTS])
+        result = PublicInventory(
+            bounded, complete=bool(bounded) and len(bounded) == len(attachments),
+            lots=bounded_lots, lots_complete=lots_complete and list(bounded_lots) == lots,
+        )
     except Exception as error:
         logger.warning("Goszakupki document inventory unavailable: %s", type(error).__name__)
     finally:
-        expires = monotonic() + (_CACHE_SECONDS if result and result.attachments else _FAILURE_RETRY_SECONDS)
+        expires = monotonic() + (_CACHE_SECONDS if result and (result.attachments or result.lots) else _FAILURE_RETRY_SECONDS)
         with _lock:
             _cache[canonical_url] = (expires, result)
             if len(_cache) > _MAX_ENTRIES:

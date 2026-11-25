@@ -185,6 +185,18 @@ is updated. A missing, unavailable or capped inventory has
 `document_inventory_complete: false`. Links recovered this way carry no saved
 extraction from a previous version.
 
+`lots` for a native Goszakupki procedure uses the publication's lot row and
+its attached conditions. Quantity, budget, status, OKRB code, delivery period
+and delivery place are separate. A detail row with conditions does not create
+another lot. Older malformed records use the same bounded page lookup as the
+document inventory. If that lookup is unavailable or the table is ambiguous,
+`lot_inventory_complete` is false and only identifiable saved lots can remain.
+Delivery place is the wording in the native lot. Additional sites may be
+specified in the original documents.
+The opportunities feed includes already stored native lots and their
+`lot_inventory_complete` flag. Missing lot snapshots remain available through
+the scoped detail endpoint.
+
 `objects` carries source-provided structured procurement objects. Existing
 collectors store these as `lots`, so `objects` mirrors `lots` until a provider
 supplies a more specific object model. A document-only site or unit breakdown

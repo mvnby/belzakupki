@@ -204,9 +204,9 @@ def test_recovers_archive_from_scoped_publication_without_reloading_saved_text(i
     client, session, _, headers = integration
     tender = _goszakupki_tender(integration)
     attachment = {"name": "Проект и смета.zip", "url": "https://goszakupki.by/get-file/estimate.zip?download=1"}
-    fetch = Mock(return_value=[attachment])
+    fetch = Mock(return_value=f'<a href="{attachment["url"]}">{attachment["name"]}</a>')
     monkeypatch.setattr(inventory, "_cache", OrderedDict())
-    monkeypatch.setattr(inventory, "fetch_tender_attachments", fetch)
+    monkeypatch.setattr(inventory, "fetch_tender_html", fetch)
     session.add(TenderDocument(tender_id=tender.id, file_name=attachment["name"], content="text from an earlier version"))
     session.commit()
     url = "/api/v1/tenders/goszakupki_by/3783338"
@@ -240,10 +240,10 @@ def test_inventory_failure_is_temporarily_cached_and_then_retried(integration, m
     _goszakupki_tender(integration)
     fetch = Mock(side_effect=[
         httpx.ConnectError("upstream unavailable"),
-        [{"name": "ТЗ.pdf", "url": "https://goszakupki.by/get-file/specification.pdf"}],
+        '<a href="/get-file/specification.pdf">ТЗ.pdf</a>',
     ])
     monkeypatch.setattr(inventory, "_cache", OrderedDict())
-    monkeypatch.setattr(inventory, "fetch_tender_attachments", fetch)
+    monkeypatch.setattr(inventory, "fetch_tender_html", fetch)
     clock = Mock(return_value=1.0)
     monkeypatch.setattr(inventory, "monotonic", clock)
     url = "/api/v1/tenders/goszakupki_by/3783338"
@@ -256,6 +256,58 @@ def test_inventory_failure_is_temporarily_cached_and_then_retried(integration, m
     card = client.get(url, headers=headers).json()
     assert card["document_inventory_complete"] and len(card["documents"]) == 1
     assert fetch.call_count == 2
+
+
+def test_detail_recovers_misparsed_lots_and_attachments_in_the_same_lookup(integration, monkeypatch):
+    from apps.api import goszakupki_document_inventory as inventory
+
+    client, session, _, headers = integration
+    tender = _goszakupki_tender(integration)
+    tender.raw_data = {"lots": [
+        {"number": "Техническое обслуживание кондиционеров", "quantity": "Подача предложений"},
+        {"number": "Лот ", "quantity": "Место поставки: г. Витебск"},
+    ]}
+    session.commit()
+    fetch = Mock(return_value="""
+        <a href="/get-file/specification.pdf">specification.pdf</a>
+        <table id="lotsList"><tbody><tr class="lot-row">
+          <th class="lot-num">1</th><td class="lot-description">Техническое обслуживание кондиционеров</td>
+          <td class="lot-count-price">9 единиц, 1 368.00 BYN</td><td class="lot-status">Подача предложений</td>
+        </tr><tr class="lot-inf" id="lot-inf-1"><td>
+          <b>Место поставки товара:</b><span class="col-md-6">г. Витебск</span>
+        </td></tr></tbody></table>
+    """)
+    monkeypatch.setattr(inventory, "_cache", OrderedDict())
+    monkeypatch.setattr(inventory, "fetch_tender_html", fetch)
+    card = client.get("/api/v1/tenders/goszakupki_by/3783338", headers=headers).json()
+    assert card["document_inventory_complete"] and len(card["documents"]) == 1
+    assert card["lot_inventory_complete"]
+    assert len(card["lots"]) == 1 and card["lots"][0]["delivery_place"] == "г. Витебск"
+    fetch.assert_called_once_with(tender.url, timeout=3, max_page_bytes=2 * 1024 * 1024)
+    session.refresh(tender)
+    assert tender.raw_data["lots"][1]["number"] == "Лот "
+
+
+def test_opportunity_feed_uses_saved_public_lot_fields_without_live_requests(integration, monkeypatch):
+    from apps.api import goszakupki_document_inventory as inventory
+
+    client, session, matches, headers = integration
+    tender = _goszakupki_tender(integration)
+    tender.raw_data = {
+        "lot_inventory_complete": True,
+        "lots": [{"number": "1", "name": "Монтаж кондиционера", "delivery_place": "г. Лепель",
+                  "status": "Подача предложений", "unrelated_raw_field": "do not export"}],
+    }
+    session.commit()
+    source_read = Mock(side_effect=AssertionError("Feed must use saved data"))
+    monkeypatch.setattr(inventory, "fetch_tender_html", source_read)
+    payload = client.get("/api/v1/opportunities", headers=headers).json()
+    item = next(item for item in payload["items"] if item["id"] == matches[0].id)
+    assert item["tender"]["lot_inventory_complete"]
+    (lot,) = item["tender"]["lots"]
+    assert lot["number"] == "1" and lot["delivery_place"] == "г. Лепель"
+    assert "unrelated_raw_field" not in lot
+    source_read.assert_not_called()
 
 
 def test_goszakupki_source_customer_fields_reach_scoped_api(integration):

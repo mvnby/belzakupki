@@ -11,6 +11,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from worker.sources.base import extract_external_id, normalize_html_text
+from worker.sources.goszakupki_lots import native_lots
 from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP, map_regions
 
 BASE_URL = "https://goszakupki.by"
@@ -325,13 +326,13 @@ def fetch_dynamic_tenders(
     )
 
 
-def fetch_tender_attachments(
+def fetch_tender_html(
     tender_url: str,
     *,
     verify_ssl: bool | None = None,
     timeout: float = 15,
     max_page_bytes: int | None = None,
-) -> list[dict[str, str]]:
+) -> str:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
     headers = build_headers()
     if max_page_bytes is not None:
@@ -364,7 +365,10 @@ def fetch_tender_attachments(
                     body.extend(chunk)
                 html = body.decode(response.encoding or "utf-8", errors="replace")
 
-    soup = BeautifulSoup(html, "html.parser")
+    return html
+
+
+def attachments_from_page(soup: BeautifulSoup, tender_url: str) -> list[dict[str, str]]:
     attachments = []
     for link in soup.find_all("a", href=True):
         href = link["href"]
@@ -375,6 +379,13 @@ def fetch_tender_attachments(
             file_name = normalize_html_text(link.get_text("", strip=False)) or href.split("/")[-1]
             attachments.append({"name": file_name, "url": file_url})
     return attachments
+
+
+def fetch_tender_attachments(
+    tender_url: str, *, verify_ssl: bool | None = None, timeout: float = 15, max_page_bytes: int | None = None,
+) -> list[dict[str, str]]:
+    html = fetch_tender_html(tender_url, verify_ssl=verify_ssl, timeout=timeout, max_page_bytes=max_page_bytes)
+    return attachments_from_page(BeautifulSoup(html, "html.parser"), tender_url)
 
 
 def parse_tender_details_html(html: str) -> dict[str, Any]:
@@ -480,8 +491,13 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
             else:
                 payment_terms = td_val
 
-    # 2. Parse Lots Table
-    for table in soup.find_all("table"):
+    # 2. Parse native lot rows. Fall back for archived unstyled table layouts.
+    structured_lots = native_lots(soup)
+    lot_inventory_complete = False
+    if structured_lots is not None:
+        lots, lot_inventory_complete = structured_lots
+    legacy_tables = soup.find_all("table") if structured_lots is None else ()
+    for table in legacy_tables:
         headers = [th.get_text(" ", strip=True).lower() for th in table.find_all("th")]
         if not headers:
             first_row = table.find("tr")
@@ -567,7 +583,8 @@ def parse_tender_details_html(html: str) -> dict[str, Any]:
         "legal_address": legal_address,
         "delivery_terms": delivery_terms,
         "payment_terms": payment_terms,
-        "lots": lots
+        "lots": lots,
+        "lot_inventory_complete": lot_inventory_complete,
     }
 
 

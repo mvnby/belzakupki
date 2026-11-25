@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import quote, urljoin, urlparse
@@ -11,12 +12,14 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from apps.api.auth import signing_secret
-from apps.api.goszakupki_document_inventory import MAX_DOCUMENT_NAME, MAX_DOCUMENT_URL, MAX_DOCUMENTS, refresh_inventory
+from apps.api.goszakupki_document_inventory import (
+    MAX_DOCUMENT_NAME, MAX_DOCUMENT_URL, MAX_DOCUMENTS, MAX_LOTS, PublicInventory, refresh_inventory,
+)
 from belzakupki_db.models import SearchProfile, Tender, TenderDocument, TenderMatch, Tenant
 from belzakupki_db.session import get_session
 from worker.sources.canonical import tender_canonical_url
@@ -28,6 +31,17 @@ security = HTTPBearer(auto_error=False)
 class ProfileSummary(BaseModel):
     id: int
     name: str
+
+
+class NativeTenderLot(BaseModel):
+    number: str
+    name: str
+    quantity: str | None = None
+    estimated_value: str | None = None
+    status: str | None = None
+    okrb: str | None = None
+    delivery_place: str | None = None
+    delivery_period: str | None = None
 
 
 class TenderSummary(BaseModel):
@@ -42,6 +56,8 @@ class TenderSummary(BaseModel):
     published_at: datetime | None
     estimated_value: str | float | None
     contacts: Any = None
+    lots: list[NativeTenderLot] = Field(default_factory=list)
+    lot_inventory_complete: bool = False
 
 
 class Opportunity(BaseModel):
@@ -101,6 +117,7 @@ class TenderDetail(BaseModel):
     delivery_terms: str | None = None
     payment_terms: str | None = None
     lots: list[dict[str, Any]]
+    lot_inventory_complete: bool | None = None
     objects: list[dict[str, Any]]
     documents: list[TenderDocumentLink]
     document_inventory_complete: bool
@@ -254,6 +271,11 @@ def _safe_source_url(value: Any, base_url: str) -> str | None:
 EXTRACTED_DOCUMENT_TEXT_LIMIT = 120_000
 DOCUMENT_DOWNLOAD_MAX_BYTES = 25 * 1024 * 1024
 DOCUMENT_DOWNLOAD_MAX_REDIRECTS = 3
+_FEED_LOT_LIMIT = 20
+_FEED_LOT_FIELD_LIMITS = {
+    "number": 60, "name": 1000, "quantity": 100, "estimated_value": 100,
+    "status": 80, "okrb": 40, "delivery_place": 700, "delivery_period": 100,
+}
 
 
 def _document_id(name: str, source_url: str) -> str:
@@ -294,12 +316,10 @@ def _document_links(
     links, complete = _attachment_links(raw.get("attachments"), tender.source.base_url)
     from_saved_inventory = bool(links)
     if not links and tender.source.code == "goszakupki_by":
-        canonical = tender_canonical_url(tender.source.code, tender.url, raw)
-        if canonical and canonical.rsplit("/", 1)[-1] == str(tender.external_id):
-            live = refresh_inventory(canonical)
-            if live is not None:
-                links, complete = _attachment_links(live.attachments, tender.source.base_url)
-                complete = complete and live.complete
+        live = _goszakupki_inventory(tender)
+        if live is not None:
+            links, complete = _attachment_links(live.attachments, tender.source.base_url)
+            complete = complete and live.complete
     extracted_by_name = {}
     if include_text and from_saved_inventory:
         extracted_by_name = {
@@ -315,6 +335,48 @@ def _document_links(
             extracted_text_truncated=bool(extracted_text and len(extracted_text) > EXTRACTED_DOCUMENT_TEXT_LIMIT),
         ))
     return documents, complete
+
+
+def _goszakupki_inventory(tender: Tender) -> PublicInventory | None:
+    canonical = tender_canonical_url(tender.source.code, tender.url, tender.raw_data or {})
+    if canonical and canonical.rsplit("/", 1)[-1] == str(tender.external_id):
+        return refresh_inventory(canonical)
+    return None
+
+
+def _tender_lots(tender: Tender) -> tuple[list[dict[str, Any]], bool | None]:
+    data = tender.raw_data or {}
+    raw = data.get("lots")
+    rows = [lot for lot in raw if isinstance(lot, dict)] if isinstance(raw, list) else []
+    if tender.source.code != "goszakupki_by":
+        return rows, None
+    verified = [lot for lot in rows if _identified_lot(lot)]
+    if data.get("lot_inventory_complete") is True and verified and len(verified) == len(raw):
+        return verified[:MAX_LOTS], len(verified) <= MAX_LOTS
+    live = _goszakupki_inventory(tender)
+    if live and live.lots:
+        return list(live.lots), live.lots_complete
+    return verified[:MAX_LOTS], False
+
+
+def _identified_lot(lot: dict) -> bool:
+    return bool(lot.get("name") and re.fullmatch(r"(?:Лот\s+)?[1-9]\d*", str(lot.get("number") or ""), re.I))
+
+
+def _saved_lots_summary(tender: Tender, raw: dict) -> tuple[list[NativeTenderLot], bool]:
+    rows = raw.get("lots")
+    if tender.source.code != "goszakupki_by" or raw.get("lot_inventory_complete") is not True or not isinstance(rows, list):
+        return [], False
+    lots = []
+    complete = len(rows) <= _FEED_LOT_LIMIT
+    for row in rows[:_FEED_LOT_LIMIT]:
+        if not isinstance(row, dict) or not _identified_lot(row) or not isinstance(row["name"], str):
+            complete = False
+            continue
+        fields = {key: str(row[key]) for key in _FEED_LOT_FIELD_LIMITS if row.get(key)}
+        complete = complete and all(len(value) <= _FEED_LOT_FIELD_LIMITS[key] for key, value in fields.items())
+        lots.append(NativeTenderLot(**{key: value[:_FEED_LOT_FIELD_LIMITS[key]] for key, value in fields.items()}))
+    return lots, bool(lots) and complete
 
 
 def _provider_download_settings(source_code: str) -> tuple[dict[str, str], bool, str | None]:
@@ -407,6 +469,7 @@ def tender_detail(
     tender = _scoped_tender(source_code, external_id, tenant_id, session)
     raw = tender.raw_data or {}
     documents, document_inventory_complete = _document_links(tender, session)
+    lots, lot_inventory_complete = _tender_lots(tender)
     return TenderDetail(
         source=tender.source.code,
         external_id=tender.external_id or "",
@@ -423,10 +486,8 @@ def tender_detail(
         customer=_customer_details(tender),
         delivery_terms=_mapping_value(raw, "delivery_terms"),
         payment_terms=_mapping_value(raw, "payment_terms"),
-        lots=raw.get("lots") if isinstance(raw.get("lots"), list) else [],
-        objects=raw.get("objects") if isinstance(raw.get("objects"), list) else (
-            raw.get("lots") if isinstance(raw.get("lots"), list) else []
-        ),
+        lots=lots, lot_inventory_complete=lot_inventory_complete,
+        objects=raw.get("objects") if isinstance(raw.get("objects"), list) else lots,
         documents=documents,
         document_inventory_complete=document_inventory_complete,
     )
@@ -499,6 +560,7 @@ def opportunities(
         tender = match.tender
         raw = tender.raw_data or {}
         status = relevance_status(match)
+        lots, lot_inventory_complete = _saved_lots_summary(tender, raw)
         items.append(Opportunity(
             id=match.id, updated_at=max(utc(match.updated_at), utc(tender.updated_at), utc(match.profile.updated_at)),
             profile=ProfileSummary(id=match.profile.id, name=match.profile.name),
@@ -515,6 +577,7 @@ def opportunities(
                 deadline_at=utc(tender.deadline_at) if tender.deadline_at else None,
                 published_at=utc(tender.published_at) if tender.published_at else None,
                 estimated_value=raw.get("estimated_value"), contacts=raw.get("contacts"),
+                lots=lots, lot_inventory_complete=lot_inventory_complete,
             ), reason=match.reason or "", ai_analysis=match.ai_analysis,
         ))
     next_cursor = jwt.encode(
