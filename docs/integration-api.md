@@ -163,6 +163,7 @@ the collector never invents an UNP, address, or corrected contact value.
     "contacts": {"name": "Иванов И.И.", "phone": "+375...", "email": "mail@example.by"}
   },
   "objects": [{"number": "1", "name": "Оборудование", "quantity": "8 шт."}],
+  "document_inventory_complete": true,
   "documents": [{
     "id": "sha256-hex", "name": "specification.doc",
     "source_url": "https://goszakupki.by/...",
@@ -176,6 +177,13 @@ the collector never invents an UNP, address, or corrected contact value.
 the consumer decides whether conflicting contact values need review. The
 consumer should impose its own smaller combined prompt budget when assembling
 several documents.
+
+For a scoped native Goszakupki record with an empty saved inventory, the API
+checks the exact current publication for links. A separate short cache shares
+this bounded lookup between detail and download requests. No procurement record
+is updated. A missing, unavailable or capped inventory has
+`document_inventory_complete: false`. Links recovered this way carry no saved
+extraction from a previous version.
 
 `objects` carries source-provided structured procurement objects. Existing
 collectors store these as `lots`, so `objects` mirrors `lots` until a provider
