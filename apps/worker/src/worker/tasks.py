@@ -8,6 +8,7 @@ from redis import Redis
 
 from belzakupki_db.session import SessionLocal
 from belzakupki_db.models import SearchProfile
+from belzakupki_db.integration_scope import isolated_market_profile_ids
 from worker.ingest import (
     get_pending_ai_analysis_max_id,
     get_pending_results_max_id,
@@ -57,8 +58,9 @@ def _raise_stage_failures(failures: list[str]) -> None:
         raise PipelineIncompleteError("Pipeline incomplete; failed stages: " + "; ".join(failures))
 
 
-def _ingest_sources(session, *, profiles) -> list[str]:
+def _ingest_sources(session, *, profiles, market_only: bool = False) -> list[str]:
     failures: list[str] = []
+    options = {"market_only": True} if market_only else {}
     for source_code, ingest in (
         ("goszakupki_by", ingest_goszakupki_tenders),
         ("icetrade_by", ingest_icetrade_tenders),
@@ -66,7 +68,7 @@ def _ingest_sources(session, *, profiles) -> list[str]:
         ("gias_by", ingest_gias_tenders),
     ):
         _run_stage(session, failures, f"ingest:{source_code}",
-                   partial(ingest, session, profiles=profiles, limit=20, commit=False))
+                   partial(ingest, session, profiles=profiles, limit=20, commit=False, **options))
     return failures
 
 
@@ -168,9 +170,12 @@ def run_profile_task_job(profile_id: int) -> None:
             return
 
         logger.info("RQ Worker: running profile {}", profile_id)
-        failures = _ingest_sources(session, profiles=[profile])
-        _run_stage(session, failures, "ai", partial(_drain_all_ai_analysis, session))
-        _run_stage(session, failures, "notify", partial(dispatch_notifications, session, drain=True))
+        market_only = profile_id in isolated_market_profile_ids()
+        ingestion_options = {"market_only": True} if market_only else {}
+        failures = _ingest_sources(session, profiles=[profile], **ingestion_options)
+        if not market_only:
+            _run_stage(session, failures, "ai", partial(_drain_all_ai_analysis, session))
+            _run_stage(session, failures, "notify", partial(dispatch_notifications, session, drain=True))
         _raise_stage_failures(failures)
         # Deterministic RQ job identity prevents overlap while it runs. Stamp
         # completion only after the whole pipeline succeeds so a crash does not

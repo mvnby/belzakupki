@@ -108,6 +108,24 @@ def test_routing_failure_still_runs_ai_and_notifications(pipeline):
         assert "notify" in set(session.scalars(select(Tenant.name)))
 
 
+@pytest.mark.parametrize("failure", [None, "http"])
+def test_market_profile_isolates_failures_and_runs_no_paid_stages(pipeline, monkeypatch, failure):
+    sessions, calls, failures, _ = pipeline
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", "1")
+    monkeypatch.setenv("INTEGRATION_PROFILE_IDS", "2")
+    if failure:
+        failures["ingest:icetrade_by"] = failure
+        with pytest.raises(tasks.PipelineIncompleteError, match="ingest:icetrade_by"):
+            tasks.run_profile_task_job(1)
+    else:
+        tasks.run_profile_task_job(1)
+    assert calls == [f"ingest:{source}" for source in SOURCES]
+    with sessions() as session:
+        names = set(session.scalars(select(Tenant.name)))
+        assert names == set(calls) - ({"ingest:icetrade_by"} if failure else set())
+        assert (session.get(SearchProfile, 1).last_run_at > PREVIOUS_RUN.replace(tzinfo=None)) == (failure is None)
+
+
 @pytest.mark.parametrize("kind", ["global", "profile"])
 def test_complete_pipeline_succeeds_and_only_then_stamps_profile(pipeline, kind):
     sessions, calls, _, redis = pipeline

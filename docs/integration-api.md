@@ -212,6 +212,14 @@ only after the sweep completes. Each page holds at most 100 entries.
 The market projection contains public source facts. The collector skips AI
 and notifications for matches in these dedicated profiles.
 
+A scheduled market profile collects up to 20 notices per source. The
+Goszakupki and ICETRADE adapters read the first page of each distinct search
+and take turns selecting notices from those pages. This keeps later
+equipment queries in the sample when an earlier search fills a page.
+The collector evaluates named lots in the market profile and retains the
+saved inventory on repeated identical listings. The scheduled market task
+ends after collection and matching.
+
 Market-scoped detail and original routes share the same prefix. A tender
 must have a verified source reference in the selected market profiles. These
 routes enforce the existing upstream attachment limits and return only the

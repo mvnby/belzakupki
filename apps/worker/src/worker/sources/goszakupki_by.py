@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from worker.sources.base import extract_external_id, normalize_html_text
+from worker.sources.base import extract_external_id, normalize_html_text, select_search_results
 from worker.sources.goszakupki_lots import native_lots
 from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP, map_regions
 
@@ -217,10 +217,11 @@ def fetch_tenders_for_searches(
     *,
     limit: int | None = None,
     verify_ssl: bool | None = None,
+    balanced: bool = False,
 ) -> list[dict]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
-    tenders: list[dict] = []
-    seen_external_ids: set[str] = set()
+    if balanced:
+        searches = dict.fromkeys(searches)
 
     with httpx.Client(
         follow_redirects=True,
@@ -230,38 +231,15 @@ def fetch_tenders_for_searches(
     ) as client:
         client.get(BASE_URL).raise_for_status()
 
-        for search in searches:
-            remaining = None if limit is None else limit - len(tenders)
+        def pages():
+            for search in searches:
+                response = client.get(build_search_url(search))
+                response.raise_for_status()
+                if response.url.path == "/site/login":
+                    raise RuntimeError("goszakupki.by redirected to login after session warm-up")
+                yield parse_tenders_html(response.text, search=search)
 
-            if remaining is not None and remaining <= 0:
-                break
-
-            response = client.get(build_search_url(search))
-            response.raise_for_status()
-
-            if response.url.path == "/site/login":
-                raise RuntimeError(
-                    "goszakupki.by redirected to login after session warm-up"
-                )
-
-            items = parse_tenders_html(
-                response.text,
-                search=search,
-            )
-
-            for item in items:
-                external_id = item["external_id"]
-
-                if external_id in seen_external_ids:
-                    continue
-
-                seen_external_ids.add(external_id)
-                tenders.append(item)
-
-                if limit is not None and len(tenders) >= limit:
-                    break
-
-    return tenders
+        return select_search_results(pages(), limit, balanced=balanced)
 
 
 def build_hvac_vitebsk_searches() -> list[GoszakupkiSearch]:
@@ -318,11 +296,13 @@ def fetch_dynamic_tenders(
     limit: int | None = None,
     *,
     verify_ssl: bool | None = None,
+    balanced: bool = False,
 ) -> list[dict]:
     return fetch_tenders_for_searches(
         build_dynamic_searches(profiles),
         limit=limit,
         verify_ssl=verify_ssl,
+        balanced=balanced,
     )
 
 
