@@ -197,6 +197,27 @@ The opportunities feed includes already stored native lots and their
 `lot_inventory_complete` flag. Missing lot snapshots remain available through
 the scoped detail endpoint.
 
+## Dedicated tender market feed
+
+`GET /api/v1/tender-market/publications` lists public notices matched by
+`INTEGRATION_MARKET_PROFILE_IDS` in the authenticated integration tenant.
+Use distinct, active source profiles that belong to that tenant. Missing,
+overlapping or unavailable profiles return 503. Market cursors are bound to
+the integration tenant and exact market profile set.
+
+A sweep lists accepting notices with an upcoming deadline or a publication
+date within 30 days when the deadline is absent. It also includes notices
+with lifecycle updates within the last day. Consumers retire unseen notices
+only after the sweep completes. Each page holds at most 100 entries.
+The market projection contains public source facts. The collector skips AI
+and notifications for matches in these dedicated profiles.
+
+Market-scoped detail and original routes share the same prefix. A tender
+must have a verified source reference in the selected market profiles. These
+routes enforce the existing upstream attachment limits and return only the
+public source content. Kitlane is responsible for applying its company-specific
+filters after reading the shared feed.
+
 `objects` carries source-provided structured procurement objects. Existing
 collectors store these as `lots`, so `objects` mirrors `lots` until a provider
 supplies a more specific object model. A document-only site or unit breakdown

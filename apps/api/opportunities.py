@@ -153,11 +153,11 @@ def integration_profile_ids() -> list[int]:
         raise HTTPException(503, "Invalid integration profile configuration") from None
 
 
-def cursor_after(cursor: str | None, tenant_id: int) -> int:
+def cursor_after(cursor: str | None, tenant_id: int, *, audience: str = "opportunities-v1") -> int:
     if not cursor:
         return 0
     try:
-        data = jwt.decode(cursor, signing_secret(), algorithms=["HS256"], audience="opportunities-v1")
+        data = jwt.decode(cursor, signing_secret(), algorithms=["HS256"], audience=audience)
         if data["tenant_id"] != tenant_id or type(data["after_id"]) is not int or data["after_id"] < 0:
             raise ValueError("Invalid cursor scope")
         return data["after_id"]
@@ -431,8 +431,10 @@ def _scoped_tender(
     external_id: str,
     tenant_id: int,
     session: Session,
+    *,
+    profile_ids: list[int] | tuple[int, ...] | None = None,
 ) -> Tender:
-    profile_ids = integration_profile_ids()
+    profile_ids = integration_profile_ids() if profile_ids is None else profile_ids
     match_scope = select(TenderMatch.id).join(TenderMatch.profile).where(
         TenderMatch.tender_id == Tender.id,
         SearchProfile.tenant_id == tenant_id,
@@ -467,8 +469,12 @@ def tender_detail(
     here; consumers can request each original through the scoped proxy below.
     """
     tender = _scoped_tender(source_code, external_id, tenant_id, session)
+    return _tender_detail_response(tender, session)
+
+
+def _tender_detail_response(tender: Tender, session: Session, *, include_customer: bool = True) -> TenderDetail:
     raw = tender.raw_data or {}
-    documents, document_inventory_complete = _document_links(tender, session)
+    documents, document_inventory_complete = _document_links(tender, session, include_text=include_customer)
     lots, lot_inventory_complete = _tender_lots(tender)
     return TenderDetail(
         source=tender.source.code,
@@ -483,11 +489,11 @@ def tender_detail(
         deadline_at=utc(tender.deadline_at) if tender.deadline_at else None,
         estimated_value=raw.get("estimated_value"),
         currency=_mapping_value(raw, "currency"),
-        customer=_customer_details(tender),
+        customer=_customer_details(tender) if include_customer else TenderCustomer(),
         delivery_terms=_mapping_value(raw, "delivery_terms"),
         payment_terms=_mapping_value(raw, "payment_terms"),
         lots=lots, lot_inventory_complete=lot_inventory_complete,
-        objects=raw.get("objects") if isinstance(raw.get("objects"), list) else lots,
+        objects=raw.get("objects") if include_customer and isinstance(raw.get("objects"), list) else lots,
         documents=documents,
         document_inventory_complete=document_inventory_complete,
     )
@@ -506,6 +512,10 @@ def tender_document(
 ) -> StreamingResponse:
     """Proxy one original attachment without exposing arbitrary outbound URLs."""
     tender = _scoped_tender(source_code, external_id, tenant_id, session)
+    return _tender_document_response(tender, document_id, session)
+
+
+def _tender_document_response(tender: Tender, document_id: str, session: Session) -> StreamingResponse:
     documents, _ = _document_links(tender, session, include_text=False)
     document = next((item for item in documents if item.id == document_id), None)
     if document is None:

@@ -310,6 +310,74 @@ def test_opportunity_feed_uses_saved_public_lot_fields_without_live_requests(int
     source_read.assert_not_called()
 
 
+def test_market_uses_its_own_profiles_cursor_and_original_scope(integration, monkeypatch):
+    from worker.ingest import get_pending_ai_analysis_max_id, run_ai_analysis_for_new_matches
+
+    client, session, matches, headers = integration
+    source = _goszakupki_tender(integration).source
+    tenant_id = matches[0].profile.tenant_id
+    profile = SearchProfile(tenant_id=tenant_id, name="Общий рынок HVAC", keywords=["HVAC"])
+    another_profile = SearchProfile(tenant_id=tenant_id, name="Другая рыночная выборка", keywords=["HVAC"])
+    session.add_all([profile, another_profile])
+    session.flush()
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=40)
+    for index, status in enumerate(("open", "Отменен", "open"), 1):
+        tender = Tender(
+            source_id=source.id, external_id=str(4000 + index), title=f"Общая закупка {index}",
+            url=f"https://goszakupki.by/request/view/{4000 + index}", customer_name="Организация",
+            status=status, created_at=old if index == 3 else now, updated_at=old if index == 3 else now,
+            raw_data={
+                "contacts": {"email": "private@example.test"},
+                "lot_inventory_complete": True,
+                "lots": [{"number": "1", "name": "Монтаж вентиляции", "delivery_place": "г. Витебск"}],
+                "attachments": [{"name": "ТЗ.pdf", "url": "https://goszakupki.by/get-file/specification.pdf"}],
+            },
+        )
+        session.add(tender)
+        session.flush()
+        session.add(TenderMatch(tender_id=tender.id, profile_id=profile.id, score=15,
+                                ai_analysis={"reason": "tenant-only analysis"}))
+    session.commit()
+    operations = "/api/v1/tender-market/publications"
+    monkeypatch.setenv("INTEGRATION_PROFILE_IDS", str(matches[0].profile_id))
+    monkeypatch.delenv("INTEGRATION_MARKET_PROFILE_IDS", raising=False)
+    assert client.get(operations).status_code == 401
+    assert client.get(operations, headers=headers).status_code == 503
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(profile.id))
+    assert get_pending_ai_analysis_max_id(session, source.code) is None
+    assert run_ai_analysis_for_new_matches(session, source.code).selected_count == 0
+
+    response = client.get(operations, params={"limit": 1}, headers=headers)
+    assert response.status_code == 200, response.text
+    page = response.json()
+    (first,) = page["items"]
+    assert first["external_id"] == "4001" and first["active"]
+    assert first["lot_inventory_complete"] and first["lots"][0]["delivery_place"] == "г. Витебск"
+    assert "customer_name" not in first and "contacts" not in first and "ai_analysis" not in first
+    next_page = client.get(operations, params={"cursor": page["next_cursor"]}, headers=headers).json()
+    assert next_page["items"][0]["external_id"] == "4002" and not next_page["items"][0]["active"]
+    assert not next_page["has_more"]
+    assert client.get("/api/v1/opportunities", params={"cursor": page["next_cursor"]}, headers=headers).status_code == 400
+    crm = client.get("/api/v1/opportunities", headers=headers).json()
+    assert all(item["tender"]["external_id"] != "4001" for item in crm["items"])
+
+    detail_url = "/api/v1/tender-market/tenders/goszakupki_by/4001"
+    response = client.get(detail_url, headers=headers)
+    assert response.status_code == 200 and response.json()["customer"]["contacts"] is None
+    document = response.json()["documents"][0]
+    monkeypatch.setattr("apps.api.opportunities._download_document", lambda *args: iter([b"original"]))
+    assert client.get(f"{detail_url}/documents/{document['id']}", headers=headers).content == b"original"
+    assert client.get("/api/v1/tenders/goszakupki_by/4001", headers=headers).status_code == 404
+    assert client.get("/api/v1/tender-market/tenders/goszakupki_by/3783338", headers=headers).status_code == 404
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(another_profile.id))
+    assert client.get(operations, params={"cursor": page["next_cursor"]}, headers=headers).status_code == 400
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(matches[0].profile_id))
+    assert client.get(operations, headers=headers).status_code == 503
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", "123456789")
+    assert client.get(operations, headers=headers).status_code == 503
+
+
 def test_goszakupki_source_customer_fields_reach_scoped_api(integration):
     from pathlib import Path
 

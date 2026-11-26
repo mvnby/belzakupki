@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from belzakupki_db.models import NotificationChannel, NotificationLog, TenderMatch, Tender, SearchProfile
 from belzakupki_db.enums import MatchStatus, NotificationStatus
+from belzakupki_db.integration_scope import worker_market_profile_ids
 from worker.resource_limits import positive_int_env
 
 
@@ -228,6 +229,7 @@ def _dispatch_notification_batch(
                  joinedload(TenderMatch.profile))
         .where(TenderMatch.status == MatchStatus.NEW,
                TenderMatch.ai_relevance.is_(True),
+               TenderMatch.profile_id.not_in(worker_market_profile_ids()),
                or_(~unfinished_channels.exists(), due_channels.exists()))
         .order_by(TenderMatch.id)
         .limit(NOTIFICATION_BATCH_SIZE)
