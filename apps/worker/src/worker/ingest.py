@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from belzakupki_db.models import SearchProfile, Tender, TenderMatch, TenderSource, TenderResult
 from belzakupki_db.enums import MatchStatus
-from belzakupki_db.integration_scope import worker_market_profile_ids
+from belzakupki_db.integration_scope import isolated_market_profile_ids
 from worker.scoring import score_text
 from worker.resource_limits import positive_int_env
 from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP
@@ -598,7 +598,7 @@ def get_pending_ai_analysis_max_id(session: Session, source_code: str) -> int | 
             TenderSource.code == source_code,
             TenderMatch.status == "new",
             TenderMatch.ai_relevance.is_(None),
-            TenderMatch.profile_id.not_in(worker_market_profile_ids()),
+            TenderMatch.profile_id.not_in(isolated_market_profile_ids()),
         )
     )
     return session.execute(stmt).scalar_one_or_none()
@@ -643,7 +643,7 @@ def run_ai_analysis_for_new_matches(
             TenderMatch.status == "new",
             TenderMatch.ai_relevance.is_(None),
             TenderMatch.id > after_id,
-            TenderMatch.profile_id.not_in(worker_market_profile_ids()),
+            TenderMatch.profile_id.not_in(isolated_market_profile_ids()),
         )
         .order_by(TenderMatch.id.asc())
         .limit(AI_ANALYSIS_BATCH_SIZE)

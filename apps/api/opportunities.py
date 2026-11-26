@@ -20,6 +20,7 @@ from apps.api.auth import signing_secret
 from apps.api.goszakupki_document_inventory import (
     MAX_DOCUMENT_NAME, MAX_DOCUMENT_URL, MAX_DOCUMENTS, MAX_LOTS, PublicInventory, refresh_inventory,
 )
+from belzakupki_db.integration_scope import isolated_market_profile_ids
 from belzakupki_db.models import SearchProfile, Tender, TenderDocument, TenderMatch, Tenant
 from belzakupki_db.session import get_session
 from worker.sources.canonical import tender_canonical_url
@@ -434,11 +435,13 @@ def _scoped_tender(
     *,
     profile_ids: list[int] | tuple[int, ...] | None = None,
 ) -> Tender:
-    profile_ids = integration_profile_ids() if profile_ids is None else profile_ids
     match_scope = select(TenderMatch.id).join(TenderMatch.profile).where(
         TenderMatch.tender_id == Tender.id,
         SearchProfile.tenant_id == tenant_id,
     ).correlate(Tender)
+    if profile_ids is None:
+        profile_ids = integration_profile_ids()
+        match_scope = match_scope.where(TenderMatch.profile_id.not_in(isolated_market_profile_ids()))
     if profile_ids:
         match_scope = match_scope.where(TenderMatch.profile_id.in_(profile_ids))
     tender = session.scalar(
@@ -556,6 +559,7 @@ def opportunities(
     stmt = select(TenderMatch).join(TenderMatch.profile)
     if profile_ids:
         stmt = stmt.where(TenderMatch.profile_id.in_(profile_ids))
+    stmt = stmt.where(TenderMatch.profile_id.not_in(isolated_market_profile_ids()))
     rows = list(session.scalars(
         stmt
         .where(SearchProfile.tenant_id == tenant_id, TenderMatch.id > after_id)
