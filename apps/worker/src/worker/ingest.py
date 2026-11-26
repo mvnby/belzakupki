@@ -567,6 +567,7 @@ def ingest_gias_tenders(
     """Сбор тендеров с ГИАС (gias.by)."""
     from worker.sources.gias_by import (
         BASE_URL as GIAS_BASE_URL,
+        fetch_market_tenders as fetch_gias_market,
         fetch_tenders as fetch_gias,
         fetch_tenders_for_profiles as fetch_gias_dynamic,
     )
@@ -578,7 +579,9 @@ def ingest_gias_tenders(
         GIAS_BASE_URL,
     )
 
-    if profiles is not None:
+    if market_only and profiles is not None:
+        items = fetch_gias_market(profiles, limit=limit)
+    elif profiles is not None:
         items = fetch_gias_dynamic(profiles, limit=limit)
     else:
         items = fetch_gias(limit=limit)

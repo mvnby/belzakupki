@@ -213,12 +213,16 @@ The market projection contains public source facts. The collector skips AI
 and notifications for matches in these dedicated profiles.
 
 A scheduled market profile collects up to 20 notices per source. The
-Goszakupki and ICETRADE adapters read the first page of each distinct search
+Goszakupki, ICETRADE and GIAS adapters read the first page of each distinct search
 and take turns selecting notices from those pages. This keeps later
 equipment queries in the sample when an earlier search fills a page.
 The collector evaluates named lots in the market profile and retains the
 saved inventory on repeated identical listings. The scheduled market task
 ends after collection and matching.
+
+GIAS reads details only for the selected unique publications. The saved lot
+place comes from the detail's `deliveryLot`, independently of the
+organizer's address. The feed uses the saved source fields.
 
 Market-scoped detail and original routes share the same prefix. A tender
 must have a verified source reference in the selected market profiles. These

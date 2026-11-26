@@ -366,15 +366,24 @@ def _identified_lot(lot: dict) -> bool:
 
 def _saved_lots_summary(tender: Tender, raw: dict) -> tuple[list[NativeTenderLot], bool]:
     rows = raw.get("lots")
-    if tender.source.code != "goszakupki_by" or raw.get("lot_inventory_complete") is not True or not isinstance(rows, list):
+    if (
+        tender.source.code not in {"goszakupki_by", "gias_by"}
+        or raw.get("lot_inventory_complete") is not True
+        or not isinstance(rows, list)
+    ):
         return [], False
     lots = []
+    numbers = set()
     complete = len(rows) <= _FEED_LOT_LIMIT
     for row in rows[:_FEED_LOT_LIMIT]:
         if not isinstance(row, dict) or not _identified_lot(row) or not isinstance(row["name"], str):
             complete = False
             continue
         fields = {key: str(row[key]) for key in _FEED_LOT_FIELD_LIMITS if row.get(key)}
+        if fields["number"] in numbers:
+            complete = False
+            continue
+        numbers.add(fields["number"])
         complete = complete and all(len(value) <= _FEED_LOT_FIELD_LIMITS[key] for key, value in fields.items())
         lots.append(NativeTenderLot(**{key: value[:_FEED_LOT_FIELD_LIMITS[key]] for key, value in fields.items()}))
     return lots, bool(lots) and complete

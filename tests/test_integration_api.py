@@ -384,6 +384,7 @@ def test_market_uses_its_own_profiles_cursor_and_original_scope(integration, mon
 
 def test_market_gias_originals_follow_exact_publication_without_an_extra_profile_match(integration, monkeypatch):
     from apps.api.goszakupki_document_inventory import PublicInventory
+    from worker.sources.gias_by import map_gias_tender
 
     client, session, matches, headers = integration
     tender = matches[0].tender
@@ -393,7 +394,12 @@ def test_market_gias_originals_follow_exact_publication_without_an_extra_profile
     tender.external_id = "142802"
     canonical = "https://goszakupki.by/single-source/view/3876716"
     original = "https://goszakupki.by/get-file/tz.docx"
-    tender.raw_data = {"raw_data": {"auctionUrl": canonical}}
+    tender.raw_data = map_gias_tender({"purchaseGiasId": "142802"}, {
+        "purchaseGiasId": "142802", "auctionUrl": canonical,
+        "organizator": {"location": "г. Минск"},
+        "lots": [{"lotNumber": 1, "titleLot": "Монтаж кондиционера", "deliveryLot": "Витебская область, г. Лепель"}],
+    })
+    tender.status = "open"
     session.commit()
     monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(matches[0].profile_id))
 
@@ -407,6 +413,11 @@ def test_market_gias_originals_follow_exact_publication_without_an_extra_profile
 
     monkeypatch.setattr("apps.api.opportunities.refresh_inventory", inventory)
     monkeypatch.setattr("apps.api.opportunities._download_document", download)
+    feed = client.get("/api/v1/tender-market/publications", headers=headers)
+    assert feed.status_code == 200
+    item = next(row for row in feed.json()["items"] if row["external_id"] == tender.external_id)
+    assert item["lot_inventory_complete"]
+    assert item["lots"][0]["delivery_place"] == "Витебская область, г. Лепель"
     base = "/api/v1/tender-market/tenders"
     gias_url = f"{base}/gias_by/142802"
     response = client.get(gias_url, headers=headers)
