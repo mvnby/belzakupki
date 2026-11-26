@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, call, patch
 import pytest
 
 from worker.sources.gias_by import (
+    DETAIL_API_URL,
+    SEARCH_API_URL,
     extract_region_fallback,
+    fetch_market_tenders,
     map_gias_tender,
     fetch_tenders,
     fetch_tenders_for_profiles,
@@ -118,6 +122,49 @@ def test_map_gias_tender_with_detail():
     assert mapped["lots"][0]["quantity"] == "1.0 Штука"
     assert mapped["lots"][0]["estimated_value"] == 37625.25
     assert mapped["lots"][0]["okrb"] == "26.51.53.830"
+    assert mapped["lots"][0]["delivery_place"] == "Витебск"
+    assert mapped["lot_inventory_complete"]
+
+
+def test_gias_search_row_does_not_verify_organizer_as_lot_location():
+    lot = {"lotNumber": 1, "titleLot": "Поставка кондиционера"}
+    listing = {"purchaseGiasId": "listed", "organizator": {"location": "г. Минск"}, "lots": [lot]}
+    mapped = map_gias_tender(listing)
+    assert mapped["region"] == "5"
+    assert mapped["lots"][0]["delivery_place"] == ""
+    assert not mapped["lot_inventory_complete"]
+    assert not map_gias_tender(listing, {**listing, "lots": [lot, None]})["lot_inventory_complete"]
+
+
+@patch("httpx.Client")
+def test_market_search_selects_one_unique_later_result_before_fetching_details(mock_client_class):
+    client = mock_client_class.return_value.__enter__.return_value
+
+    def search(url, *, json):
+        assert url == SEARCH_API_URL and json["pageSize"] == 3
+        terms = {
+            "вентиляция": ["shared", "b", "a"],
+            "кондиционер": ["shared", "c", "d"],
+            "холодильное оборудование": ["e", "f"],
+            "пусто": None,
+        }
+        ids = terms[json["title"]]
+        return MagicMock(**{"json.return_value": {"content": [
+            {"purchaseGiasId": id_, "title": id_} for id_ in ids
+        ] if ids else None}})
+
+    def detail(url):
+        id_ = url.rsplit("/", 1)[-1]
+        returned_id = "unexpected" if id_ == "e" else id_
+        return MagicMock(**{"json.return_value": {"purchaseGiasId": returned_id, "title": returned_id}})
+
+    client.post.side_effect = search
+    client.get.side_effect = detail
+    profile = SimpleNamespace(keywords=["Кондиционер", " вентиляция ", "холодильное оборудование",
+                                        "пусто", "ВЕНТИЛЯЦИЯ"])
+    assert [tender["external_id"] for tender in fetch_market_tenders([profile], limit=3)] == ["shared", "e", "b"]
+    assert client.post.call_count == 4
+    assert client.get.call_args_list == [call(f"{DETAIL_API_URL}/{id_}") for id_ in ("shared", "e", "b")]
 
 
 @patch("httpx.Client")

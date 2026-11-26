@@ -7,10 +7,13 @@ from datetime import datetime, timezone
 from loguru import logger
 import httpx
 
+from worker.sources.base import select_search_results
+
 BASE_URL = "https://gias.by"
 SEARCH_API_URL = f"{BASE_URL}/search/api/v1/search/purchases"
 DETAIL_API_URL = f"{BASE_URL}/purchase/api/v1/purchase"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)"
+_HEADERS = {"User-Agent": USER_AGENT, "Content-Type": "application/json"}
 
 GIAS_PROCEDURE_TYPES = {
     1: "открытый конкурс",
@@ -81,8 +84,10 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
             })
             
     # 3. Map lots
+    raw_lots = d.get("lots")
+    lot_rows = [lot for lot in raw_lots if isinstance(lot, dict)] if isinstance(raw_lots, list) else []
     lots = []
-    for lot in (d.get("lots") or []):
+    for lot in lot_rows:
         unit_name = lot.get("unit", {}).get("name") if lot.get("unit") else ""
         volume = lot.get("volume")
         qty_str = f"{volume} {unit_name}".strip() if volume is not None else unit_name
@@ -95,7 +100,8 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
             "name": lot.get("titleLot"),
             "quantity": qty_str,
             "estimated_value": lot.get("price"),
-            "okrb": okrb_str
+            "okrb": okrb_str,
+            "delivery_place": _delivery_place(lot),
         })
         
     # 4. Map contacts
@@ -112,12 +118,12 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
             contacts = {"name": str(contact_org), "phone": "", "email": ""}
             
     # 5. Map delivery terms
-    deliveries = set(lot.get("deliveryLot") for lot in (d.get("lots") or []) if lot and lot.get("deliveryLot"))
+    deliveries = {lot["delivery_place"] for lot in lots if lot["delivery_place"]}
     delivery_terms = ", ".join(sorted(list(deliveries))) if deliveries else None
     
     # 6. Map payment terms and funding source
     funding_sources = set()
-    for lot in (d.get("lots") or []):
+    for lot in lot_rows:
         for fs in (lot.get("financeSource") or []):
             if fs and fs.get("budgetCost", 0) > 0:
                 funding_sources.add("Бюджетные средства")
@@ -185,8 +191,44 @@ def map_gias_tender(item: dict, detail: dict | None = None) -> dict:
         "delivery_terms": delivery_terms,
         "payment_terms": payment_terms,
         "lots": lots,
+        "lot_inventory_complete": bool(
+            detail and lots and len(lots) == len(raw_lots)
+            and detail.get("purchaseGiasId")
+            and str(detail["purchaseGiasId"]) == str(item.get("purchaseGiasId"))
+        ),
         "raw_data": d
     }
+
+
+def _delivery_place(lot: dict) -> str:
+    value = lot.get("deliveryLot")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _search_page(client: httpx.Client, page_size: int, *, title: str | None = None) -> list[dict]:
+    payload = {"page": 0, "pageSize": page_size, "sortField": "dtCreate", "sortOrder": "DESC"}
+    if title:
+        payload["title"] = title
+    response = client.post(SEARCH_API_URL, json=payload)
+    response.raise_for_status()
+    items = response.json()["content"]
+    if items is not None and not isinstance(items, list):
+        raise ValueError("Invalid GIAS search results")
+    return items or []
+
+
+def _read_detail(client: httpx.Client, item: dict) -> dict:
+    purchase_id = item["purchaseGiasId"]
+    try:
+        response = client.get(f"{DETAIL_API_URL}/{purchase_id}")
+        response.raise_for_status()
+        detail = response.json()
+        if not isinstance(detail, dict) or str(detail.get("purchaseGiasId")) != str(purchase_id):
+            raise ValueError("GIAS detail does not identify the requested purchase")
+    except Exception as exc:
+        logger.warning(f"Failed to fetch details for tender {purchase_id}: {exc}. Using search item fallback.")
+        detail = None
+    return map_gias_tender(item, detail)
 
 
 def fetch_tenders(
@@ -196,18 +238,7 @@ def fetch_tenders(
 ) -> list[dict]:
     """Fetches list of tenders from GIAS live API."""
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Content-Type": "application/json"
-    }
-    
     page_size = limit if limit is not None and limit > 0 else 50
-    payload = {
-        "page": 0,
-        "pageSize": page_size,
-        "sortField": "dtCreate",
-        "sortOrder": "DESC"
-    }
     
     logger.info(f"Fetching GIAS tenders from {SEARCH_API_URL}...")
     
@@ -215,44 +246,48 @@ def fetch_tenders(
     try:
         with httpx.Client(
             follow_redirects=True,
-            headers=headers,
+            headers=_HEADERS,
             timeout=30.0,
             verify=verify,
         ) as client:
-            r = client.post(SEARCH_API_URL, json=payload)
-            r.raise_for_status()
-            
-            search_data = r.json()
-            items = search_data.get("content", [])
+            items = _search_page(client, page_size)
             
             if limit is not None:
                 items = items[:limit]
                 
             logger.info(f"Found {len(items)} items in search. Fetching details...")
             
-            for item in items:
-                purchase_gias_id = item.get("purchaseGiasId")
-                if not purchase_gias_id:
-                    continue
-                    
-                detail_url = f"{DETAIL_API_URL}/{purchase_gias_id}"
-                try:
-                    logger.debug(f"Fetching details for tender {purchase_gias_id}...")
-                    r_detail = client.get(detail_url)
-                    r_detail.raise_for_status()
-                    detail = r_detail.json()
-                except Exception as de:
-                    logger.warning(f"Failed to fetch details for tender {purchase_gias_id}: {de}. Using search item fallback.")
-                    detail = None
-                    
-                mapped = map_gias_tender(item, detail)
-                tenders.append(mapped)
+            tenders = [_read_detail(client, item) for item in items if item.get("purchaseGiasId")]
                 
     except Exception as e:
         logger.error(f"Error fetching tenders from GIAS: {e}")
         raise
         
     return tenders
+
+
+def fetch_market_tenders(
+    profiles: Iterable[Any], limit: int | None = None, *, verify_ssl: bool | None = None,
+) -> list[dict]:
+    """Search HVAC terms at the source and read details only for the selected notices."""
+    titles = sorted({
+        keyword.strip().casefold()
+        for profile in profiles
+        for keyword in profile.keywords or []
+        if keyword.strip()
+    })
+    limit = 20 if limit is None else limit
+    if not titles or limit <= 0:
+        return []
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    with httpx.Client(follow_redirects=True, headers=_HEADERS, timeout=30, verify=verify) as client:
+        pages = (
+            [{"external_id": str(item["purchaseGiasId"]), "item": item}
+             for item in _search_page(client, limit, title=title) if item.get("purchaseGiasId")]
+            for title in titles
+        )
+        selected = select_search_results(pages, limit, balanced=True)
+        return [_read_detail(client, row["item"]) for row in selected]
 
 
 def fetch_tenders_for_profiles(
