@@ -218,6 +218,9 @@ and take turns selecting notices from those pages. This keeps later
 equipment queries in the sample when an earlier search fills a page.
 BUTB uses the public registry's subject search and reads its first page for
 each distinct term. Selection shares the same 20-notice cap across terms.
+The registry can publish a deadline as a Minsk calendar date. Such notices
+remain eligible through that date while the source accepts submissions. The
+market feed returns a timestamp when the registry specifies a time.
 The collector evaluates named lots in the market profile and retains the
 saved inventory on repeated identical listings. The scheduled market task
 ends after collection and matching.

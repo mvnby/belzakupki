@@ -109,8 +109,9 @@ def publications(
         url = _safe_source_url(tender.url, tender.source.base_url)
         if not url or not tender.external_id:
             continue
-        deadline = utc(tender.deadline_at) if tender.deadline_at else None
         raw = tender.raw_data or {}
+        date_only = tender.source.code == "butb_by" and raw.get("deadline_date_only") is True
+        deadline = utc(tender.deadline_at) if tender.deadline_at and not date_only else None
         lots, complete = _saved_lots_summary(tender, raw)
         items.append(MarketPublication(
             source=tender.source.code, external_id=tender.external_id, url=url, title=tender.title,

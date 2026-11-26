@@ -382,6 +382,32 @@ def test_market_uses_its_own_profiles_cursor_and_original_scope(integration, mon
     assert client.get(operations, headers=headers).status_code == 503
 
 
+def test_market_butb_uses_calendar_cutoffs_and_publishes_explicit_deadline_times(integration, monkeypatch):
+    client, session, matches, headers = integration
+    profile = SearchProfile(tenant_id=matches[0].profile.tenant_id, name="Рынок БУТБ", keywords=["охлаждение"])
+    source = TenderSource(code="butb_by", name="БУТБ", base_url="https://zakupki.butb.by")
+    session.add_all([profile, source])
+    session.flush()
+    cutoff = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=2)
+    for identity, date_only in (("EZ101", True), ("EZ102", False)):
+        tender = Tender(
+            source_id=source.id, external_id=identity, title="Охлаждение",
+            url=f"https://zakupki.butb.by/auctions/viewinvitation.html?auction={identity}",
+            status="подача предложений / документов", deadline_at=cutoff,
+            raw_data={"deadline_date_only": date_only},
+        )
+        session.add(tender)
+        session.flush()
+        session.add(TenderMatch(tender_id=tender.id, profile_id=profile.id, score=20))
+    session.commit()
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(profile.id))
+    response = client.get("/api/v1/tender-market/publications", headers=headers)
+    assert response.status_code == 200
+    rows = {item["external_id"]: item for item in response.json()["items"]}
+    assert rows["EZ101"]["active"] and rows["EZ101"]["deadline_at"] is None
+    assert rows["EZ102"]["active"] and datetime.fromisoformat(rows["EZ102"]["deadline_at"]) == cutoff
+
+
 def test_market_gias_originals_follow_exact_publication_without_an_extra_profile_match(integration, monkeypatch):
     from apps.api.goszakupki_document_inventory import PublicInventory
     from worker.sources.gias_by import map_gias_tender
