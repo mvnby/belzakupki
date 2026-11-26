@@ -191,6 +191,9 @@ def upsert_tender(
 
         return tender, True
 
+    if tender.content_hash == item_hash:
+        return tender, False
+
     tender.title = item["title"]
     tender.customer_name = item.get("customer_name")
     tender.url = item["url"]
@@ -248,15 +251,18 @@ def extract_tender_region(tender: Tender) -> str | None:
     return None
 
 
-def score_tender(session: Session, tender: Tender) -> int:
+def score_tender(session: Session, tender: Tender, *, profiles: list[SearchProfile] | None = None) -> int:
     """Проводит морфологический скоринг текста тендера по всем активным профилям поиска.
 
     При совпадении ключевых слов создает или обновляет TenderMatch.
     Возвращает количество созданных/обновленных совпадений.
+    При явном рыночном профиле учитывает названия связанных лотов.
     """
-    profiles = list(session.execute(
-        select(SearchProfile).where(SearchProfile.is_active.is_(True))
-    ).scalars())
+    market_scan = profiles is not None
+    if profiles is None:
+        profiles = list(session.execute(
+            select(SearchProfile).where(SearchProfile.is_active.is_(True))
+        ).scalars())
 
     matches_count = 0
     text = " ".join(
@@ -268,6 +274,11 @@ def score_tender(session: Session, tender: Tender) -> int:
         )
         if value
     )
+    native_lots = (tender.raw_data or {}).get("lots")
+    if market_scan and isinstance(native_lots, list):
+        lot_names = [row["name"] for row in native_lots[:100]
+                     if isinstance(row, dict) and isinstance(row.get("name"), str)]
+        text = " ".join([text, *lot_names])
 
     tender_region = extract_tender_region(tender)
 
@@ -344,6 +355,24 @@ def enrich_tender_if_needed(
             logger.warning(f"Failed to enrich tender {tender.id} details: {e}")
 
 
+def _route_source_notice(
+    session: Session, tender: Tender, was_created: bool, source_code: str,
+    market_profiles: list[SearchProfile] | None,
+) -> int:
+    if market_profiles is None:
+        matches_count = score_tender(session, tender)
+        enrich_tender_if_needed(session, tender, was_created, matches_count, source_code)
+        return matches_count
+    saved = tender.raw_data or {}
+    if source_code == SOURCE_CODE:
+        complete = saved.get("lot_inventory_complete") is True and isinstance(saved.get("attachments"), list)
+    else:
+        complete = isinstance(saved.get("attachments"), list)
+    if not complete:
+        enrich_tender_if_needed(session, tender, True, 0, source_code)
+    return score_tender(session, tender, profiles=market_profiles)
+
+
 def ingest_goszakupki_tenders(
     session: Session,
     *,
@@ -351,6 +380,7 @@ def ingest_goszakupki_tenders(
     limit: int | None = None,
     search_preset: str | None = None,
     commit: bool = True,
+    market_only: bool = False,
 ) -> IngestStats:
     """Сбор тендеров с goszakupki.by.
 
@@ -361,7 +391,7 @@ def ingest_goszakupki_tenders(
 
     if profiles is not None:
         from worker.sources.goszakupki_by import fetch_dynamic_tenders
-        items = fetch_dynamic_tenders(profiles, limit=limit)
+        items = fetch_dynamic_tenders(profiles, limit=limit, balanced=market_only)
     elif search_preset == "hvac-vitebsk":
         items = fetch_hvac_vitebsk_tenders(limit=limit)
     elif search_preset is None:
@@ -384,11 +414,9 @@ def ingest_goszakupki_tenders(
             updated += 1
 
         if profiles is not None:
-            matches_count = score_tender(session, tender)
-            matches += matches_count
-            enrich_tender_if_needed(session, tender, was_created, matches_count, SOURCE_CODE)
+            matches += _route_source_notice(session, tender, was_created, SOURCE_CODE, profiles if market_only else None)
 
-    if profiles is not None:
+    if profiles is not None and not market_only:
         run_ai_analysis_for_new_matches(session, SOURCE_CODE)
 
     if commit:
@@ -409,6 +437,7 @@ def ingest_icetrade_tenders(
     limit: int | None = None,
     search_preset: str | None = None,
     commit: bool = True,
+    market_only: bool = False,
 ) -> IngestStats:
     """Сбор тендеров с icetrade.by.
 
@@ -430,7 +459,7 @@ def ingest_icetrade_tenders(
     )
 
     if profiles is not None:
-        items = fetch_icetrade_dynamic(profiles, limit=limit)
+        items = fetch_icetrade_dynamic(profiles, limit=limit, balanced=market_only)
     elif search_preset == "hvac-vitebsk":
         items = fetch_icetrade_hvac(limit=limit)
     elif search_preset is None:
@@ -453,11 +482,9 @@ def ingest_icetrade_tenders(
             updated += 1
 
         if profiles is not None:
-            matches_count = score_tender(session, tender)
-            matches += matches_count
-            enrich_tender_if_needed(session, tender, was_created, matches_count, "icetrade_by")
+            matches += _route_source_notice(session, tender, was_created, "icetrade_by", profiles if market_only else None)
 
-    if profiles is not None:
+    if profiles is not None and not market_only:
         run_ai_analysis_for_new_matches(session, "icetrade_by")
 
     if commit:
@@ -477,6 +504,7 @@ def ingest_butb_tenders(
     profiles: list[SearchProfile] | None = None,
     limit: int | None = None,
     commit: bool = True,
+    market_only: bool = False,
 ) -> IngestStats:
     """Сбор тендеров с БУТБ (zakupki.butb.by)."""
     from worker.sources.butb_by import (
@@ -512,11 +540,9 @@ def ingest_butb_tenders(
             updated += 1
 
         if profiles is not None:
-            matches_count = score_tender(session, tender)
-            matches += matches_count
-            enrich_tender_if_needed(session, tender, was_created, matches_count, "butb_by")
+            matches += _route_source_notice(session, tender, was_created, "butb_by", profiles if market_only else None)
 
-    if profiles is not None:
+    if profiles is not None and not market_only:
         run_ai_analysis_for_new_matches(session, "butb_by")
 
     if commit:
@@ -536,6 +562,7 @@ def ingest_gias_tenders(
     profiles: list[SearchProfile] | None = None,
     limit: int | None = None,
     commit: bool = True,
+    market_only: bool = False,
 ) -> IngestStats:
     """Сбор тендеров с ГИАС (gias.by)."""
     from worker.sources.gias_by import (
@@ -571,10 +598,12 @@ def ingest_gias_tenders(
             updated += 1
 
         if profiles is not None:
-            matches_count = score_tender(session, tender)
-            matches += matches_count
+            if market_only:
+                matches += score_tender(session, tender, profiles=profiles)
+            else:
+                matches += score_tender(session, tender)
 
-    if profiles is not None:
+    if profiles is not None and not market_only:
         run_ai_analysis_for_new_matches(session, "gias_by")
 
     if commit:

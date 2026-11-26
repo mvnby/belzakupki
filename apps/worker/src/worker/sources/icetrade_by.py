@@ -12,7 +12,7 @@ import httpx
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
-from worker.sources.base import extract_external_id, normalize_html_text
+from worker.sources.base import extract_external_id, normalize_html_text, select_search_results
 from worker.sources.canonical import normalize_procurement_url
 from worker.sources.region_codes import ICETRADE_REGION_MAP, map_regions
 
@@ -269,36 +269,19 @@ def fetch_tenders_for_searches(
     *,
     limit: int | None = None,
     verify_ssl: bool | None = None,
+    balanced: bool = False,
 ) -> list[dict]:
     verify = should_verify_ssl() if verify_ssl is None else verify_ssl
-    tenders: list[dict] = []
-    seen_external_ids: set[str] = set()
+    if balanced:
+        searches = dict.fromkeys(searches)
 
     with _create_client(verify) as client:
-        for search in searches:
-            remaining = None if limit is None else limit - len(tenders)
-            if remaining is not None and remaining <= 0:
-                break
+        def pages():
+            for search in searches:
+                response = _execute_request(client, "GET", build_search_url(search))
+                yield parse_tenders_html(response.text, search=search)
 
-            response = _execute_request(client, "GET", build_search_url(search))
-
-            items = parse_tenders_html(
-                response.text,
-                search=search,
-            )
-
-            for item in items:
-                external_id = item["external_id"]
-                if external_id in seen_external_ids:
-                    continue
-
-                seen_external_ids.add(external_id)
-                tenders.append(item)
-
-                if limit is not None and len(tenders) >= limit:
-                    break
-
-    return tenders
+        return select_search_results(pages(), limit, balanced=balanced)
 
 
 def build_hvac_vitebsk_searches() -> list[IcetradeSearch]:
@@ -347,11 +330,13 @@ def fetch_dynamic_tenders(
     limit: int | None = None,
     *,
     verify_ssl: bool | None = None,
+    balanced: bool = False,
 ) -> list[dict]:
     return fetch_tenders_for_searches(
         build_dynamic_searches(profiles),
         limit=limit,
         verify_ssl=verify_ssl,
+        balanced=balanced,
     )
 
 

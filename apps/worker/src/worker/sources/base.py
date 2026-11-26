@@ -6,7 +6,9 @@ icetrade_by — keep this module free of any source-specific logic.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from hashlib import sha256
+from itertools import chain, zip_longest
 from urllib.parse import parse_qs, urlparse
 
 
@@ -34,3 +36,20 @@ def extract_external_id(url: str) -> str:
 def normalize_html_text(value: str) -> str:
     """Collapse whitespace in HTML-extracted text."""
     return re.sub(r"\s+", " ", value).strip()
+
+
+def select_search_results(pages: Iterable[list[dict]], limit: int | None, *, balanced: bool) -> list[dict]:
+    """Select unique notices, giving each search a turn in a market scan."""
+    if limit is not None and limit <= 0:
+        return []
+    candidates = chain.from_iterable(zip_longest(*pages) if balanced else pages)
+    selected = []
+    seen = set()
+    for notice in candidates:
+        if notice is None or notice["external_id"] in seen:
+            continue
+        seen.add(notice["external_id"])
+        selected.append(notice)
+        if limit is not None and len(selected) >= limit:
+            break
+    return selected
