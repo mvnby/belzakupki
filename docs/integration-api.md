@@ -216,6 +216,8 @@ A scheduled market profile collects up to 20 notices per source. The
 Goszakupki, ICETRADE and GIAS adapters read the first page of each distinct search
 and take turns selecting notices from those pages. This keeps later
 equipment queries in the sample when an earlier search fills a page.
+BUTB uses the public registry's subject search and reads its first page for
+each distinct term. Selection shares the same 20-notice cap across terms.
 The collector evaluates named lots in the market profile and retains the
 saved inventory on repeated identical listings. The scheduled market task
 ends after collection and matching.

@@ -5,15 +5,21 @@ import os
 import re
 from typing import Any
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlencode
+from xml.etree import ElementTree
 from loguru import logger
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
-from worker.sources.base import normalize_html_text
+from worker.sources.base import normalize_html_text, select_search_results
 
 BASE_URL = "https://zakupki.butb.by"
 REGISTRY_URL = f"{BASE_URL}/auctions/reestrauctions.html"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+_REGISTRY_FORM_ID = "fra"
+_REGISTRY_TABLE_ID = "fra:reestrAu"
+_VIEW_STATE = "javax.faces.ViewState"
+_MAX_REGISTRY_BYTES = 2 * 1024 * 1024
 
 
 def should_verify_ssl() -> bool:
@@ -206,6 +212,133 @@ def fetch_tenders(
             tenders = tenders[:limit]
             
         return tenders
+
+
+def _registry_page(client: httpx.Client, method: str, **kwargs) -> bytes:
+    with client.stream(method, REGISTRY_URL, **kwargs) as response:
+        response.raise_for_status()
+        contents = bytearray()
+        for chunk in response.iter_bytes():
+            if len(contents) + len(chunk) > _MAX_REGISTRY_BYTES:
+                raise ValueError("BUTB registry response exceeds the size limit")
+            contents.extend(chunk)
+    return bytes(contents)
+
+
+def _registry_form(html: str) -> Tag:
+    form = BeautifulSoup(html, "html.parser").find("form", id=_REGISTRY_FORM_ID)
+    if form is None:
+        raise ValueError("BUTB registry search form is unavailable")
+    return form
+
+
+def _form_values(form: Tag) -> dict[str, list[str]]:
+    values: dict[str, list[str]] = {}
+    for field in form.select("input[name]:not([disabled])"):
+        input_type = field.get("type", "text")
+        if input_type in {"hidden", "text"}:
+            values.setdefault(field["name"], []).append(field.get("value", ""))
+        elif input_type in {"checkbox", "radio"} and field.has_attr("checked"):
+            # HTML submits "on" for a checked input with no explicit value.
+            # An empty value clears the visible registry columns in this form.
+            values.setdefault(field["name"], []).append(field.get("value", "on"))
+    for field in form.select("select[name]:not([disabled])"):
+        options = field.select("option[selected]:not([disabled])")
+        if not options and not field.has_attr("multiple"):
+            options = field.select("option:not([disabled])")[:1]
+        if options:
+            values[field["name"]] = [option.get("value", option.get_text()) for option in options]
+    return values
+
+
+def _search_action(
+    client: httpx.Client, values: dict[str, list[str]], component: str, *, expand: bool = False,
+) -> dict[str, str]:
+    payload = {
+        **values,
+        _REGISTRY_FORM_ID: _REGISTRY_FORM_ID,
+        "fra:j_idcl": component if expand else "",
+        "javax.faces.source": component,
+        "javax.faces.partial.event": "click",
+        "javax.faces.partial.execute": "@all",
+        "javax.faces.partial.render": "@all",
+        "javax.faces.partial.ajax": "true",
+        "ice.focus": component,
+        "ice.event.target": component,
+        "ice.event.captured": component,
+        "ice.event.type": "onclick",
+        "ice.event.alt": "false",
+        "ice.event.ctrl": "false",
+        "ice.event.shift": "false",
+        "ice.event.meta": "false",
+        "ice.event.x": "0",
+        "ice.event.y": "0",
+        "ice.event.left": "false",
+        "ice.event.right": "false",
+        "ice.submit.type": "ice.s",
+        "ice.submit.serialization": "form",
+        component: component,
+    }
+    response = _registry_page(client, "POST", content=urlencode(payload, doseq=True), headers={
+        "Faces-Request": "partial/ajax",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Referer": REGISTRY_URL,
+    })
+    root = ElementTree.fromstring(response)
+    updates = {node.attrib["id"]: node.text or "" for node in root.findall("./changes/update")}
+    if root.tag != "partial-response" or not updates.get(_VIEW_STATE):
+        raise ValueError("BUTB registry did not return its search session")
+    return updates
+
+
+def _subject_field(form: Tag) -> Tag | None:
+    for field in form.select("input[type='text'][name]:not([disabled])"):
+        for owner in (field, field.parent):
+            caption = owner.find_previous_sibling()
+            if caption and normalize_html_text(caption.get_text(" ", strip=True)) == "Предмет закупки":
+                return field
+    return None
+
+
+def fetch_market_tenders(
+    profiles: Iterable[Any], limit: int | None = None, *, verify_ssl: bool | None = None,
+) -> list[dict]:
+    """Read the first public registry page for each distinct market term."""
+    terms = sorted({
+        keyword.strip().casefold()
+        for profile in profiles
+        for keyword in profile.keywords or []
+        if keyword.strip()
+    })
+    limit = 20 if limit is None else limit
+    if not terms or limit <= 0:
+        return []
+    verify = should_verify_ssl() if verify_ssl is None else verify_ssl
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=20, verify=verify) as client:
+        form = _registry_form(_registry_page(client, "GET").decode("utf-8"))
+        expand = next((
+            link for link in form.select("a[id]")
+            if link.get_text(" ", strip=True) == "Раскрыть форму поиска"
+        ), None)
+        if expand is None:
+            raise ValueError("BUTB registry search control is unavailable")
+        updates = _search_action(client, _form_values(form), expand["id"], expand=True)
+        form = _registry_form(updates.get(_REGISTRY_FORM_ID, ""))
+        field = _subject_field(form)
+        submit = form.select_one("input[type='submit'][value='Искать'][id]")
+        if field is None or submit is None:
+            raise ValueError("BUTB registry subject search is unavailable")
+
+        values = _form_values(form)
+        pages = []
+        for term in terms:
+            values[field["name"]] = [term]
+            values[_VIEW_STATE] = [updates[_VIEW_STATE]]
+            updates = _search_action(client, values, submit["id"])
+            if _REGISTRY_TABLE_ID not in updates:
+                raise ValueError("BUTB registry search did not return a results page")
+            pages.append(parse_tenders_html(updates[_REGISTRY_TABLE_ID]))
+        return select_search_results(pages, limit, balanced=True)
 
 
 def fetch_tenders_for_profiles(
