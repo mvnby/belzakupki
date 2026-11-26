@@ -75,8 +75,10 @@ app.mount("/assets", StaticFiles(directory="apps/api/static/assets", check_dir=F
 
 from apps.api.health import router as health_router
 from apps.api.opportunities import router as opportunities_router
+from apps.api.tender_market import router as tender_market_router
 app.include_router(health_router)
 app.include_router(opportunities_router)
+app.include_router(tender_market_router)
 
 # --- Аутентификация ---
 
