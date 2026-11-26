@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from apps.api.auth import signing_secret
 from apps.api.opportunities import (
-    NativeTenderLot, TenderDetail, _safe_source_url, _saved_lots_summary, _scoped_tender,
+    NativeTenderLot, TenderDetail, _document_links, _safe_source_url, _saved_lots_summary, _scoped_tender,
     _tender_detail_response, _tender_document_response, cursor_after, integration_tenant, utc,
 )
 from belzakupki_db.integration_scope import market_profile_ids
@@ -48,6 +48,10 @@ class MarketPage(BaseModel):
     items: list[MarketPublication]
     next_cursor: str | None
     has_more: bool
+
+
+class MarketTenderDetail(TenderDetail):
+    documents_source_url: str | None = None
 
 
 def _profile_ids(session: Session, tenant_id: int) -> tuple[int, ...]:
@@ -132,14 +136,39 @@ def _market_tender(source_code: str, external_id: str, tenant_id: int, session: 
     return tender
 
 
-@router.get("/tenders/{source_code}/{external_id}", response_model=TenderDetail, operation_id="get_tender_market_detail")
+def _goszakupki_mirror(tender: Tender, session: Session) -> Tender | None:
+    url = tender_canonical_url("gias_by", tender.url, tender.raw_data or {})
+    if url is None or not url.startswith("https://goszakupki.by/"):
+        return None
+    external_id = url.rsplit("/", 1)[-1]
+    source = session.scalar(select(TenderSource).where(TenderSource.code == "goszakupki_by"))
+    if source is not None and not source.is_active:
+        return None
+    if source is not None:
+        saved = session.scalar(select(Tender).where(Tender.source_id == source.id, Tender.external_id == external_id))
+        if saved is not None and tender_canonical_url(source.code, saved.url, saved.raw_data or {}) == url:
+            return saved
+    # Only a verified GIAS pointer can cause a read-through. This transient
+    # publication is used solely by the bounded, same-host document reader.
+    source = TenderSource(code="goszakupki_by", name="Госзакупки", base_url="https://goszakupki.by")
+    return Tender(source=source, external_id=external_id, title=tender.title, url=url, raw_data={})
+
+
+@router.get("/tenders/{source_code}/{external_id}", response_model=MarketTenderDetail, operation_id="get_tender_market_detail")
 def detail(
     source_code: str, external_id: str,
     tenant_id: int = Depends(integration_tenant), session: Session = Depends(get_session),
-) -> TenderDetail:
+) -> MarketTenderDetail:
     """Read native lot conditions and original links within the market profile scope."""
-    return _tender_detail_response(_market_tender(source_code, external_id, tenant_id, session), session,
-                                   include_customer=False)
+    tender = _market_tender(source_code, external_id, tenant_id, session)
+    data = _tender_detail_response(tender, session, include_customer=False)
+    result = MarketTenderDetail(**data.model_dump(), documents_source_url=tender.url)
+    if source_code == "gias_by" and not result.documents:
+        mirror = _goszakupki_mirror(tender, session)
+        if mirror is not None:
+            result.documents, result.document_inventory_complete = _document_links(mirror, session, include_text=False)
+            result.documents_source_url = mirror.url
+    return result
 
 
 @router.get("/tenders/{source_code}/{external_id}/documents/{document_id}", operation_id="download_tender_market_original")
@@ -148,4 +177,7 @@ def original(
     tenant_id: int = Depends(integration_tenant), session: Session = Depends(get_session),
 ) -> StreamingResponse:
     """Read one original referenced by an authorized market publication."""
-    return _tender_document_response(_market_tender(source_code, external_id, tenant_id, session), document_id, session)
+    tender = _market_tender(source_code, external_id, tenant_id, session)
+    if source_code == "gias_by" and not _document_links(tender, session, include_text=False)[0]:
+        tender = _goszakupki_mirror(tender, session) or tender
+    return _tender_document_response(tender, document_id, session)

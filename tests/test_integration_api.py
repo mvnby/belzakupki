@@ -370,12 +370,58 @@ def test_market_uses_its_own_profiles_cursor_and_original_scope(integration, mon
     assert client.get(f"{detail_url}/documents/{document['id']}", headers=headers).content == b"original"
     assert client.get("/api/v1/tenders/goszakupki_by/4001", headers=headers).status_code == 404
     assert client.get("/api/v1/tender-market/tenders/goszakupki_by/3783338", headers=headers).status_code == 404
+    monkeypatch.delenv("INTEGRATION_PROFILE_IDS")
+    assert all(item["tender"]["external_id"] != "4001" for item in client.get("/api/v1/opportunities", headers=headers).json()["items"])
+    assert client.get("/api/v1/tenders/goszakupki_by/4001", headers=headers).status_code == 404
+    monkeypatch.setenv("INTEGRATION_PROFILE_IDS", str(matches[0].profile_id))
     monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(another_profile.id))
     assert client.get(operations, params={"cursor": page["next_cursor"]}, headers=headers).status_code == 400
     monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(matches[0].profile_id))
     assert client.get(operations, headers=headers).status_code == 503
     monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", "123456789")
     assert client.get(operations, headers=headers).status_code == 503
+
+
+def test_market_gias_originals_follow_exact_publication_without_an_extra_profile_match(integration, monkeypatch):
+    from apps.api.goszakupki_document_inventory import PublicInventory
+
+    client, session, matches, headers = integration
+    tender = matches[0].tender
+    tender.source.code = "gias_by"
+    tender.source.base_url = "https://gias.by"
+    tender.url = "https://gias.by/gias/#/purchase/current/142802"
+    tender.external_id = "142802"
+    canonical = "https://goszakupki.by/single-source/view/3876716"
+    original = "https://goszakupki.by/get-file/tz.docx"
+    tender.raw_data = {"raw_data": {"auctionUrl": canonical}}
+    session.commit()
+    monkeypatch.setenv("INTEGRATION_MARKET_PROFILE_IDS", str(matches[0].profile_id))
+
+    def inventory(url):
+        assert url == canonical
+        return PublicInventory(({"name": "Задание.docx", "url": original},), True, (), False)
+
+    def download(source_code, url, base_url):
+        assert (source_code, url, base_url) == ("goszakupki_by", original, "https://goszakupki.by")
+        return iter([b"public original"])
+
+    monkeypatch.setattr("apps.api.opportunities.refresh_inventory", inventory)
+    monkeypatch.setattr("apps.api.opportunities._download_document", download)
+    base = "/api/v1/tender-market/tenders"
+    gias_url = f"{base}/gias_by/142802"
+    response = client.get(gias_url, headers=headers)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["source_url"] == tender.url and data["documents_source_url"] == canonical
+    assert data["document_inventory_complete"]
+    (document,) = data["documents"]
+    assert client.get(f"{gias_url}/documents/{document['id']}", headers=headers).content == b"public original"
+    assert client.get(f"{base}/goszakupki_by/3876716", headers=headers).status_code == 404
+    assert client.get("/api/v1/tenders/gias_by/142802", headers=headers).status_code == 404
+    tender.raw_data = {**tender.raw_data, "canonical_reference_conflict": True}
+    session.commit()
+    assert client.get(gias_url, headers=headers).json()["documents"] == []
+    assert client.get(f"{gias_url}/documents/{document['id']}", headers=headers).status_code == 404
 
 
 def test_goszakupki_source_customer_fields_reach_scoped_api(integration):

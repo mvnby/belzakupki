@@ -218,6 +218,12 @@ routes enforce the existing upstream attachment limits and return only the
 public source content. Kitlane is responsible for applying its company-specific
 filters after reading the shared feed.
 
+For a GIAS publication with an empty attachment list, these routes can
+resolve its verified Goszakupki reference using the same bounded inventory
+reader. The detail keeps the GIAS identity and carries the actual
+`documents_source_url`. The download uses the scoped GIAS identity and
+the attachment ID from that detail.
+
 `objects` carries source-provided structured procurement objects. Existing
 collectors store these as `lots`, so `objects` mirrors `lots` until a provider
 supplies a more specific object model. A document-only site or unit breakdown

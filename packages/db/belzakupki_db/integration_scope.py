@@ -20,7 +20,7 @@ def market_profile_ids() -> tuple[int, ...]:
     return market
 
 
-def worker_market_profile_ids() -> tuple[int, ...]:
+def isolated_market_profile_ids() -> tuple[int, ...]:
     try:
         return market_profile_ids()
     except ValueError:
