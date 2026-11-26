@@ -509,6 +509,7 @@ def ingest_butb_tenders(
     """Сбор тендеров с БУТБ (zakupki.butb.by)."""
     from worker.sources.butb_by import (
         BASE_URL as BUTB_BASE_URL,
+        fetch_market_tenders as fetch_butb_market,
         fetch_tenders as fetch_butb,
         fetch_tenders_for_profiles as fetch_butb_dynamic,
     )
@@ -520,7 +521,9 @@ def ingest_butb_tenders(
         BUTB_BASE_URL,
     )
 
-    if profiles is not None:
+    if market_only and profiles is not None:
+        items = fetch_butb_market(profiles, limit=limit)
+    elif profiles is not None:
         items = fetch_butb_dynamic(profiles, limit=limit)
     else:
         items = fetch_butb(limit=limit)

@@ -1,19 +1,88 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs
+from xml.etree import ElementTree
+
+import httpx
 import pytest
 
 from worker.sources.butb_by import (
+    REGISTRY_URL,
     parse_date,
     parse_price,
     extract_region,
     parse_tenders_html,
     fetch_tenders_for_profiles,
+    fetch_market_tenders,
     parse_tender_details_html,
     fetch_tender_details,
     fetch_tender_attachments,
 )
+
+
+def test_market_search_uses_current_form_state_and_balances_subjects(monkeypatch):
+    form = """
+      <form id="fra">
+        <input type="checkbox" name="fra:showRegistration" checked>
+        <input type="hidden" name="javax.faces.ViewState" value="initial">
+        {}
+      </form>
+    """
+    initial = form.format('<a id="fra:expand"><span>Раскрыть форму поиска</span></a>')
+    expanded = form.format("""
+      <table><tr>
+        <td>Предмет закупки</td>
+        <td><input type="text" name="fra:subject" disabled="disabled" value="old">
+            <input type="text" name="fra:title"></td>
+      </tr></table>
+      <input type="submit" value="Искать" name="fra:search" id="fra:search">
+    """)
+
+    def updates(state, component, markup):
+        root = ElementTree.Element("partial-response")
+        changes = ElementTree.SubElement(root, "changes")
+        ElementTree.SubElement(changes, "update", id=component).text = markup
+        ElementTree.SubElement(changes, "update", id="javax.faces.ViewState").text = state
+        return ElementTree.tostring(root, encoding="utf-8")
+
+    requested = []
+    expected = {
+        "вентиляция": ("expanded", "page-1", ("RQ301", "RQ302", "RQ303")),
+        "кондиционеры": ("page-1", "page-2", ("RQ301", "RQ304", "RQ305")),
+    }
+
+    def registry(request):
+        assert str(request.url) == REGISTRY_URL
+        if request.method == "GET":
+            return httpx.Response(200, text=initial)
+        assert request.method == "POST"
+        assert request.headers["Faces-Request"] == "partial/ajax"
+        values = parse_qs(request.content.decode(), keep_blank_values=True)
+        assert values["fra:showRegistration"] == ["on"]
+        assert "fra:subject" not in values
+        if values["javax.faces.source"] == ["fra:expand"]:
+            assert values["javax.faces.ViewState"] == ["initial"]
+            return httpx.Response(200, content=updates("expanded", "fra", expanded))
+        term = values["fra:title"][0]
+        state, next_state, ids = expected[term]
+        assert values["javax.faces.source"] == ["fra:search"]
+        assert values["javax.faces.ViewState"] == [state]
+        requested.append(term)
+        rows = "".join(f"<tr><td>{identity}</td><td>{term}</td><td>ЗОИ</td><td>25.11.2026</td>"
+                       "<td></td><td></td><td></td><td>30.11.2026</td><td>Подача предложений</td></tr>"
+                       for identity in ids)
+        return httpx.Response(200, content=updates(next_state, "fra:reestrAu", f"<table>{rows}</table>"))
+
+    client = httpx.Client(transport=httpx.MockTransport(registry))
+    monkeypatch.setattr("worker.sources.butb_by.httpx.Client", lambda **kwargs: client)
+    profiles = [SimpleNamespace(keywords=[" Кондиционеры ", "Вентиляция", "кондиционеры"])]
+    found = fetch_market_tenders(profiles, limit=3)
+    assert requested == ["вентиляция", "кондиционеры"]
+    assert [tender["external_id"] for tender in found] == ["RQ301", "RQ302", "RQ304"]
+
 
 def test_parse_date():
     assert parse_date("22.05.2026") == datetime(2026, 5, 21, 21, 0, tzinfo=timezone.utc)
