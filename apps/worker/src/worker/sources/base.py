@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from itertools import chain, zip_longest
 from urllib.parse import parse_qs, urlparse
@@ -36,6 +37,23 @@ def extract_external_id(url: str) -> str:
 def normalize_html_text(value: str) -> str:
     """Collapse whitespace in HTML-extracted text."""
     return re.sub(r"\s+", " ", value).strip()
+
+
+def parse_deadline_string(deadline_str: str | None, *, require_time: bool = False) -> datetime | None:
+    """Read a Minsk deadline, using the calendar-day cutoff for date-only inputs."""
+    match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?", deadline_str or "")
+    if not match:
+        return None
+    day, month, year, hour, minute, second = match.groups()
+    if require_time and hour is None:
+        return None
+    try:
+        minsk = timezone(timedelta(hours=3))
+        return datetime(
+            int(year), int(month), int(day), int(hour or 23), int(minute or 59), int(second or 0), tzinfo=minsk,
+        ).astimezone(timezone.utc)
+    except ValueError:
+        return None
 
 
 def select_search_results(pages: Iterable[list[dict]], limit: int | None, *, balanced: bool) -> list[dict]:

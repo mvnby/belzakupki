@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from hashlib import sha256
 import json
 import os
@@ -19,6 +20,7 @@ from belzakupki_db.enums import MatchStatus
 from belzakupki_db.integration_scope import isolated_market_profile_ids
 from worker.scoring import score_text
 from worker.resource_limits import positive_int_env
+from worker.sources.base import parse_deadline_string
 from worker.sources.region_codes import GOSZAKUPKI_REGION_MAP
 from worker.sources.canonical import preserve_canonical_reference
 from worker.sources.goszakupki_by import (
@@ -96,33 +98,6 @@ def get_or_create_source(session: Session, code: str, name: str, base_url: str) 
         ).scalar_one()
 
     return source
-
-
-from datetime import datetime, timezone, timedelta
-import re
-
-def parse_deadline_string(deadline_str: str | None) -> datetime | None:
-    """Парсит строковое представление даты дедлайна (формат DD.MM.YYYY [HH:MM])
-
-    и преобразует его в UTC datetime, учитывая часовой пояс Минска (UTC+3).
-    """
-    if not deadline_str:
-        return None
-        
-    match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?", deadline_str)
-    if not match:
-        return None
-        
-    day, month, year, hour, minute = match.groups()
-    hour_val = int(hour) if hour else 23
-    min_val = int(minute) if minute else 59
-    
-    try:
-        tz_minsk = timezone(timedelta(hours=3))
-        dt = datetime(int(year), int(month), int(day), hour_val, min_val, tzinfo=tz_minsk)
-        return dt.astimezone(timezone.utc)
-    except ValueError:
-        return None
 
 
 def make_json_serializable(d: Any) -> Any:

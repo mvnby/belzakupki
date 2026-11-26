@@ -11,7 +11,7 @@ from loguru import logger
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-from worker.sources.base import normalize_html_text, select_search_results
+from worker.sources.base import normalize_html_text, parse_deadline_string, select_search_results
 
 BASE_URL = "https://zakupki.butb.by"
 REGISTRY_URL = f"{BASE_URL}/auctions/reestrauctions.html"
@@ -147,7 +147,10 @@ def parse_tenders_html(html: str) -> list[dict]:
         # Parse price and dates
         val, curr = parse_price(price_str)
         published_dt = parse_date(published_str)
-        deadline_dt = parse_date(deadline_str)
+        deadline_dt = parse_deadline_string(deadline_str, require_time=True)
+        deadline_day = parse_date(deadline_str) if deadline_dt is None else None
+        if deadline_day is not None:
+            deadline_dt = deadline_day + timedelta(days=1, seconds=-1)
         region = extract_region(customer)
         
         tender_url = f"{BASE_URL}/auctions/viewinvitation.html?auction={external_id}"
@@ -164,6 +167,7 @@ def parse_tenders_html(html: str) -> list[dict]:
             "currency": curr,
             "published_at": published_dt,
             "deadline_at": deadline_dt,
+            "deadline_date_only": deadline_day is not None,
             "region": region,
             "raw_data": {
                 "external_id": external_id,

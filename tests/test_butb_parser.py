@@ -131,7 +131,7 @@ def test_parse_tenders_html():
             <td>12 000,00 BYN</td>
             <td>УЗ 'Гродненская областная клиническая больница'</td>
             <td>Бюджетные средства</td>
-            <td>30.05.2026</td>
+            <td>30.05.2026 14:15</td>
             <td>Подача предложений</td>
         </tr>
         <tr>
@@ -159,11 +159,15 @@ def test_parse_tenders_html():
     assert t0["currency"] == "BYN"
     assert t0["region"] == "2"
     assert t0["funding_source"] == "Бюджетные средства"
+    assert t0["deadline_at"] == datetime(2026, 5, 29, 20, 59, 59, tzinfo=timezone.utc)
+    assert t0["deadline_date_only"]
 
     t1 = tenders[1]
     assert t1["external_id"] == "AU20260522377863"
     assert t1["url"] == "https://zakupki.butb.by/auctions/viewinvitation.html?auction=AU20260522377863"
     assert t1["region"] == "4"
+    assert t1["deadline_at"] == datetime(2026, 5, 30, 11, 15, tzinfo=timezone.utc)
+    assert not t1["deadline_date_only"]
 
 @patch("worker.sources.butb_by.fetch_tenders")
 def test_fetch_tenders_for_profiles(mock_fetch):
